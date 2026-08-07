@@ -5,7 +5,7 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { useDomeProject } from '@/composables/useDomeProject'
 import { buildDomeGroup, type DomePickMaps } from '@/lib/three-builders'
 
-const { state, model, radius } = useDomeProject()
+const { state, model, radius, strutSectionWorking } = useDomeProject()
 
 const container = ref<HTMLDivElement | null>(null)
 let renderer: THREE.WebGLRenderer | null = null
@@ -40,6 +40,7 @@ function rebuildDome() {
     mode: state.viewMode,
     explode: state.explode,
     selection: state.selection,
+    strutSection: state.trueSize ? strutSectionWorking.value : undefined,
   })
   scene.add(domeGroup)
 }
@@ -156,7 +157,7 @@ watch([model, radius], () => {
   frameCamera()
 })
 watch(
-  () => [state.viewMode, state.explode, state.selection],
+  () => [state.viewMode, state.explode, state.selection, state.trueSize, strutSectionWorking.value],
   () => rebuildDome(),
   { deep: true },
 )

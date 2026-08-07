@@ -20,10 +20,16 @@ export type Selection =
   | { kind: 'hub'; vertexId: number }
   | null
 
+/** Real cross-section of the strut stock, canonical mm. */
+export type StrutSection =
+  | { kind: 'rect'; widthMm: number; depthMm: number }
+  | { kind: 'round'; odMm: number }
+
 export interface MaterialDef {
   id: string
   label: string
   profile: string
+  section: StrutSection
   stock: { imperial: StockLength[]; metric: StockLength[] }
   defaultJoint: JointMethodId
 }
@@ -33,6 +39,7 @@ export const MATERIALS: MaterialDef[] = [
     id: 'lumber-2x4',
     label: 'Douglas Fir 2×4',
     profile: '1.5″ × 3.5″ (38 × 89 mm)',
+    section: { kind: 'rect', widthMm: 38, depthMm: 89 },
     stock: {
       imperial: [
         { length: 96, label: '8 ft' }, { length: 120, label: '10 ft' },
@@ -49,6 +56,7 @@ export const MATERIALS: MaterialDef[] = [
     id: 'lumber-2x2',
     label: 'Lumber 2×2',
     profile: '1.5″ × 1.5″ (38 × 38 mm)',
+    section: { kind: 'rect', widthMm: 38, depthMm: 38 },
     stock: {
       imperial: [
         { length: 96, label: '8 ft' }, { length: 120, label: '10 ft' },
@@ -65,6 +73,7 @@ export const MATERIALS: MaterialDef[] = [
     id: 'emt-34',
     label: 'EMT conduit ¾″',
     profile: '0.75″ trade size steel tube',
+    section: { kind: 'round', odMm: 23.4 },
     stock: {
       imperial: [{ length: 120, label: '10 ft' }],
       metric: [{ length: 3000, label: '3.0 m' }],
@@ -75,6 +84,7 @@ export const MATERIALS: MaterialDef[] = [
     id: 'pvc-1',
     label: 'PVC pipe 1″',
     profile: 'Schedule 40',
+    section: { kind: 'round', odMm: 33.4 },
     stock: {
       imperial: [{ length: 120, label: '10 ft' }, { length: 240, label: '20 ft' }],
       metric: [{ length: 3000, label: '3.0 m' }, { length: 6000, label: '6.0 m' }],
@@ -85,6 +95,7 @@ export const MATERIALS: MaterialDef[] = [
     id: 'steel-tube-1',
     label: 'Steel tube 1″',
     profile: '1″ square or round, 16 ga',
+    section: { kind: 'round', odMm: 25.4 },
     stock: {
       imperial: [{ length: 240, label: '20 ft' }, { length: 288, label: '24 ft' }],
       metric: [{ length: 6000, label: '6.0 m' }],
@@ -116,6 +127,8 @@ interface ProjectState {
   disabledStock: Record<string, boolean>
   viewMode: ViewMode
   explode: number
+  /** Render struts at their real cross-section instead of schematic sticks. */
+  trueSize: boolean
   selection: Selection
   optimizer: {
     min: number
@@ -139,6 +152,7 @@ const state = reactive<ProjectState>({
   disabledStock: {},
   viewMode: 'assembly',
   explode: 0.35,
+  trueSize: false,
   selection: null,
   optimizer: { min: 20, max: 30, result: null, running: false },
 })
@@ -224,6 +238,15 @@ const workingKerf = computed(() =>
 
 const material = computed(() => MATERIALS.find((m) => m.id === state.materialId) ?? MATERIALS[0])
 const jointMethod = computed(() => JOINT_METHODS.find((j) => j.id === state.jointId) ?? JOINT_METHODS[0])
+
+/** Material cross-section in working units (inches or mm) for rendering. */
+const strutSectionWorking = computed(() => {
+  const s = material.value.section
+  const c = (mm: number) => (state.units === 'imperial' ? mm / MM_PER_INCH : mm)
+  return s.kind === 'rect'
+    ? { kind: 'rect' as const, width: c(s.widthMm), depth: c(s.depthMm) }
+    : { kind: 'round' as const, diameter: c(s.odMm) }
+})
 
 const availableStock = computed(() => material.value.stock[state.units])
 const activeStock = computed(() => availableStock.value.filter((s) => !state.disabledStock[s.label]))
@@ -328,7 +351,11 @@ const exporters = {
       import('@/lib/three-builders'),
       import('three/examples/jsm/exporters/GLTFExporter.js'),
     ])
-    const group = buildDomeGroup(model.value, radius.value, { mode: 'assembly', explode: 0 })
+    const group = buildDomeGroup(model.value, radius.value, {
+      mode: 'assembly',
+      explode: 0,
+      strutSection: state.trueSize ? strutSectionWorking.value : undefined,
+    })
     const exporter = new GLTFExporter()
     const result = await exporter.parseAsync(group, { binary: true })
     download(`${fileStem.value}.glb`, new Blob([result as ArrayBuffer]), 'model/gltf-binary')
@@ -369,6 +396,7 @@ export function useDomeProject() {
     kerf,
     material,
     jointMethod,
+    strutSectionWorking,
     availableStock,
     activeStock,
     cutList,

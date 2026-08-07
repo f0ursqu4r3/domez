@@ -12,6 +12,12 @@ export interface BuildOptions {
   /** 0..1, only used in exploded mode. */
   explode: number
   selection?: { kind: 'strut'; edgeId: number } | { kind: 'hub'; vertexId: number } | null
+  /** Real strut cross-section in working units. When set, struts render
+   * dimensionally accurate: rectangular boards (depth oriented radially,
+   * as timber domes are built) or round tube at true OD. */
+  strutSection?:
+    | { kind: 'rect'; width: number; depth: number }
+    | { kind: 'round'; diameter: number }
 }
 
 export interface DomePickMaps {
@@ -40,8 +46,17 @@ export function buildDomeGroup(
   group.userData.pick = pick
 
   const explodeDist = opts.mode === 'exploded' ? opts.explode * radius * 0.45 : 0
-  const strutR = Math.max(radius * 0.0045, 0.02 * radius * 0.1)
-  const hubR = strutR * 2.6
+  const section = opts.strutSection
+  const strutR =
+    section?.kind === 'round'
+      ? section.diameter / 2
+      : Math.max(radius * 0.0045, 0.02 * radius * 0.1)
+  const hubR =
+    section === undefined
+      ? strutR * 2.6
+      : section.kind === 'rect'
+        ? Math.max(section.width, section.depth) * 0.72
+        : section.diameter * 1.35
 
   const selEdge = opts.selection?.kind === 'strut' ? opts.selection.edgeId : -1
   const selHub = opts.selection?.kind === 'hub' ? opts.selection.vertexId : -1
@@ -51,19 +66,25 @@ export function buildDomeGroup(
 
   // ---- Struts ----
   if (showStruts) {
-    const cyl = new THREE.CylinderGeometry(1, 1, 1, 8, 1)
+    const isRect = section?.kind === 'rect'
+    const geo = isRect
+      ? new THREE.BoxGeometry(1, 1, 1)
+      : new THREE.CylinderGeometry(1, 1, 1, section ? 16 : 8, 1)
     for (const t of model.strutTypes) {
       const mat = new THREE.MeshStandardMaterial({
         color: new THREE.Color(strutColor(t.id)),
-        roughness: 0.55,
-        metalness: 0.25,
+        roughness: isRect ? 0.8 : 0.55,
+        metalness: isRect ? 0.05 : 0.25,
       })
-      const mesh = new THREE.InstancedMesh(cyl, mat, t.count)
+      const mesh = new THREE.InstancedMesh(geo, mat, t.count)
       mesh.name = `struts-${t.label}`
       const map: number[] = []
       const m = new THREE.Matrix4()
       const q = new THREE.Quaternion()
       const s = new THREE.Vector3()
+      const xAxis = new THREE.Vector3()
+      const yAxis = new THREE.Vector3()
+      const zAxis = new THREE.Vector3()
       t.edgeIds.forEach((eid, i) => {
         const e = model.edges[eid]
         const a = toThree(model.vertices[e.v0].position, radius)
@@ -71,9 +92,27 @@ export function buildDomeGroup(
         const mid = a.clone().add(b).multiplyScalar(0.5)
         if (explodeDist > 0) mid.add(mid.clone().normalize().multiplyScalar(explodeDist))
         const dir = b.clone().sub(a)
-        q.setFromUnitVectors(UP, dir.clone().normalize())
-        s.set(strutR, dir.length(), strutR)
-        m.compose(mid, q, s)
+        if (isRect && section.kind === 'rect') {
+          // Board basis: length along the edge, depth (the wide face's normal
+          // span) radial, width tangent to the surface.
+          yAxis.copy(dir).normalize()
+          zAxis
+            .copy(mid)
+            .normalize()
+            .addScaledVector(yAxis, -yAxis.dot(mid.clone().normalize()))
+            .normalize()
+          xAxis.crossVectors(yAxis, zAxis)
+          m.makeBasis(
+            xAxis.multiplyScalar(section.width),
+            yAxis.clone().multiplyScalar(dir.length()),
+            zAxis.clone().multiplyScalar(section.depth),
+          )
+          m.setPosition(mid)
+        } else {
+          q.setFromUnitVectors(UP, dir.clone().normalize())
+          s.set(strutR, dir.length(), strutR)
+          m.compose(mid, q, s)
+        }
         mesh.setMatrixAt(i, m)
         mesh.setColorAt(
           i,

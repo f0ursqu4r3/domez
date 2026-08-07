@@ -1,9 +1,12 @@
 <script setup lang="ts">
+import { computed } from 'vue'
 import { useDomeProject, type ViewMode } from '@/composables/useDomeProject'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
+import { Toggle } from '@/components/ui/toggle'
 import { Slider } from '@/components/ui/slider'
+import { Separator } from '@/components/ui/separator'
 
-const { state } = useDomeProject()
+const { state, material } = useDomeProject()
 
 const modes: { value: ViewMode; label: string }[] = [
   { value: 'assembly', label: 'Assembly' },
@@ -11,6 +14,10 @@ const modes: { value: ViewMode; label: string }[] = [
   { value: 'surface', label: 'Surface' },
   { value: 'exploded', label: 'Exploded' },
 ]
+
+const trueSizeTitle = computed(
+  () => `Dimensionally accurate struts — ${material.value.profile}`,
+)
 </script>
 
 <template>
@@ -34,5 +41,17 @@ const modes: { value: ViewMode; label: string }[] = [
         @update:model-value="(v: number[] | undefined) => v && (state.explode = v[0])"
       />
     </div>
+    <template v-if="state.viewMode !== 'surface'">
+      <Separator orientation="vertical" class="h-5" />
+      <Toggle
+        :model-value="state.trueSize"
+        size="sm"
+        class="px-3 text-xs"
+        :title="trueSizeTitle"
+        @update:model-value="(v: boolean) => (state.trueSize = v)"
+      >
+        True size
+      </Toggle>
+    </template>
   </div>
 </template>

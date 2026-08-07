@@ -61,6 +61,7 @@ function rebuildGround() {
 function frameCamera() {
   if (!camera || !controls) return
   const r = radius.value
+  if (scene) scene.fog = new THREE.Fog(0x0a0e15, r * 6, r * 24)
   camera.position.set(r * 2.1, r * 1.35, r * 2.1)
   camera.near = r / 100
   camera.far = r * 40

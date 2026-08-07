@@ -6,7 +6,7 @@ export type JointMethodId = 'hub' | 'flattened-pipe' | 'timber-plate'
 export interface JointMethod {
   id: JointMethodId
   label: string
-  /** Length removed at EACH strut end (working units come from the caller). */
+  /** Default length removed at EACH strut end, in inches. */
   defaultEndOffset: number
   note: string
 }

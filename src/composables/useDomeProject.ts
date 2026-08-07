@@ -216,6 +216,19 @@ watch(
   { flush: 'sync' },
 )
 
+// The end offset belongs to the joint method: adopting a new joint (directly
+// or via a material switch) resets it to that joint's default. defaultEndOffset
+// is specified in inches.
+watch(
+  () => state.jointId,
+  (id, prev) => {
+    if (id === prev) return
+    const joint = JOINT_METHODS.find((j) => j.id === id)
+    if (joint) state.endOffsetMm = joint.defaultEndOffset * MM_PER_INCH
+  },
+  { flush: 'sync' },
+)
+
 const model = computed(() =>
   generateDome({ frequency: state.frequency, fraction: state.fraction, baseMode: state.baseMode }),
 )
@@ -374,12 +387,14 @@ function loadProjectFile(text: string): boolean {
   state.fraction = settings.fraction as Fraction
   state.baseMode = (settings.baseMode as 'natural' | 'leveled') ?? 'natural'
   state.materialId = settings.material
-  // Two sync watchers fire on units/materialId; set explicit values after.
-  // The file stores display units; the setters store canonical mm.
+  // Sync watchers fire on units/materialId/jointId; set explicit values
+  // after them (jointId before endOffset, or the joint-default reset would
+  // clobber the loaded offset). The file stores display units; the setters
+  // store canonical mm.
+  state.jointId = settings.jointMethod as JointMethodId
   diameter.value = settings.diameter
   endOffset.value = settings.endOffset
   kerf.value = settings.kerf
-  state.jointId = settings.jointMethod as JointMethodId
   state.increment = settings.increment
   state.selection = null
   return true

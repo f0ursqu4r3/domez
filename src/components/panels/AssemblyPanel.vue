@@ -24,18 +24,34 @@ const { assemblyPlan, exporters } = useDomeProject()
       >
         <div class="flex items-center justify-between">
           <span class="font-semibold text-sm">
-            <span class="text-primary font-mono">{{ String(course.index + 1).padStart(2, '0') }}</span>
-            {{ course.index === 0 ? 'Base ring' : course.index === assemblyPlan.courses.length - 1 ? 'Apex' : `Course ${course.index + 1}` }}
+            <span class="text-primary font-mono">{{
+              String(course.index + 1).padStart(2, '0')
+            }}</span>
+            {{
+              course.index === 0
+                ? 'Base ring'
+                : course.index === assemblyPlan.courses.length - 1
+                  ? 'Apex'
+                  : `Course ${course.index + 1}`
+            }}
           </span>
-          <span class="text-xs font-mono text-muted-foreground">{{ course.hubIds.length }} hubs</span>
+          <span class="text-xs font-mono text-muted-foreground"
+            >{{ course.hubIds.length }} hubs</span
+          >
         </div>
         <div class="flex flex-wrap gap-1.5">
-          <Badge v-for="(count, label) in course.strutTally" :key="label" variant="secondary" class="font-mono">
+          <Badge
+            v-for="(count, label) in course.strutTally"
+            :key="label"
+            variant="secondary"
+            class="font-mono"
+          >
             {{ count }}× {{ label }}
           </Badge>
         </div>
         <p class="text-xs text-muted-foreground">
-          {{ course.riserStrutIds.length }} risers from below · {{ course.ringStrutIds.length }} in-course struts
+          {{ course.riserStrutIds.length }} risers from below ·
+          {{ course.ringStrutIds.length }} in-course struts
         </p>
       </li>
     </ol>

@@ -5,7 +5,10 @@ import type { DomeModel } from '../types'
  * Vertices are emitted in working units (inches or mm).
  */
 export function domeObj(model: DomeModel, radius: number): string {
-  const lines: string[] = ['# domez geodesic dome', `# frequency ${model.params.frequency} fraction ${model.params.fraction}`]
+  const lines: string[] = [
+    '# domez geodesic dome',
+    `# frequency ${model.params.frequency} fraction ${model.params.fraction}`,
+  ]
   for (const v of model.vertices) {
     const [x, y, z] = v.position
     lines.push(`v ${(x * radius).toFixed(6)} ${(y * radius).toFixed(6)} ${(z * radius).toFixed(6)}`)

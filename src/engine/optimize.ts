@@ -62,8 +62,8 @@ export function optimizeDiameter(model: DomeModel, opts: OptimizeOptions): Optim
       cutList.rows.reduce((s, r) => s + r.roundingError, 0) / Math.max(1, cutList.rows.length)
     // Normalize error against the worst possible (half the increment).
     const errScore = halfIncrement > 0 ? cutList.maxRoundingError / halfIncrement : 0
-    const score = wErr * errScore + wWaste * packing.wasteFraction
-      + (packing.unplaceable.length > 0 ? 1000 : 0)
+    const score =
+      wErr * errScore + wWaste * packing.wasteFraction + (packing.unplaceable.length > 0 ? 1000 : 0)
     candidates.push({
       diameter,
       diameterDisplay: workingToDiameter(diameter, opts.units),

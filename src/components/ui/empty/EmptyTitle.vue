@@ -8,15 +8,10 @@ const props = defineProps<{
 </script>
 
 <template>
-  <tr
-    data-slot="table-row"
-    :class="
-      cn(
-        'hover:bg-muted/50 data-[state=selected]:bg-muted border-b transition-colors has-aria-expanded:bg-muted/50',
-        props.class,
-      )
-    "
+  <div
+    data-slot="empty-title"
+    :class="cn('text-sm font-medium tracking-tight cn-font-heading', props.class)"
   >
     <slot />
-  </tr>
+  </div>
 </template>

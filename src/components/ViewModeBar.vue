@@ -15,13 +15,13 @@ const modes: { value: ViewMode; label: string }[] = [
   { value: 'exploded', label: 'Exploded' },
 ]
 
-const trueSizeTitle = computed(
-  () => `Dimensionally accurate struts — ${material.value.profile}`,
-)
+const trueSizeTitle = computed(() => `Dimensionally accurate struts — ${material.value.profile}`)
 </script>
 
 <template>
-  <div class="pointer-events-auto flex items-center gap-3 rounded-lg border border-border bg-card/90 px-2 py-1.5 backdrop-blur-sm shadow-lg">
+  <div
+    class="pointer-events-auto flex items-center gap-3 rounded-lg border border-border bg-card/90 px-2 py-1.5 backdrop-blur-sm shadow-lg"
+  >
     <ToggleGroup
       :model-value="state.viewMode"
       type="single"
@@ -36,7 +36,9 @@ const trueSizeTitle = computed(
       <span class="text-[10px] uppercase tracking-widest text-muted-foreground">Spread</span>
       <Slider
         :model-value="[state.explode]"
-        :min="0.05" :max="1" :step="0.01"
+        :min="0.05"
+        :max="1"
+        :step="0.01"
         class="w-28"
         @update:model-value="(v: number[] | undefined) => v && (state.explode = v[0])"
       />

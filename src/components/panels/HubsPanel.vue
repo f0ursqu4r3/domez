@@ -1,7 +1,12 @@
 <script setup lang="ts">
 import { useDomeProject } from '@/composables/useDomeProject'
 import {
-  Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
 } from '@/components/ui/table'
 import { Badge } from '@/components/ui/badge'
 
@@ -31,13 +36,20 @@ function selectHub(hubTypeId: number) {
           </TableRow>
         </TableHeader>
         <TableBody>
-          <TableRow v-for="h in model.hubTypes" :key="h.id" class="cursor-pointer" @click="selectHub(h.id)">
+          <TableRow
+            v-for="h in model.hubTypes"
+            :key="h.id"
+            class="cursor-pointer"
+            @click="selectHub(h.id)"
+          >
             <TableCell class="font-mono font-semibold">{{ h.label }}</TableCell>
             <TableCell class="text-right font-mono">{{ h.count }}</TableCell>
             <TableCell class="text-right font-mono">{{ h.valence }}</TableCell>
             <TableCell class="font-mono text-xs text-muted-foreground">{{ h.pattern }}</TableCell>
             <TableCell>
-              <Badge :variant="h.isBase ? 'default' : 'secondary'">{{ h.isBase ? 'base' : 'dome' }}</Badge>
+              <Badge :variant="h.isBase ? 'default' : 'secondary'">{{
+                h.isBase ? 'base' : 'dome'
+              }}</Badge>
             </TableCell>
           </TableRow>
         </TableBody>

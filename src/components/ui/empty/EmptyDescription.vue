@@ -2,21 +2,21 @@
 import type { HTMLAttributes } from 'vue'
 import { cn } from '@/lib/utils'
 
-const props = defineProps<{
+defineProps<{
   class?: HTMLAttributes['class']
 }>()
 </script>
 
 <template>
-  <tr
-    data-slot="table-row"
+  <p
+    data-slot="empty-description"
     :class="
       cn(
-        'hover:bg-muted/50 data-[state=selected]:bg-muted border-b transition-colors has-aria-expanded:bg-muted/50',
-        props.class,
+        'text-sm/relaxed text-muted-foreground [&>a]:underline [&>a]:underline-offset-4 [&>a:hover]:text-primary',
+        $attrs.class ?? '',
       )
     "
   >
     <slot />
-  </tr>
+  </p>
 </template>

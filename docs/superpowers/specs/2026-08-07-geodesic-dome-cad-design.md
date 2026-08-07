@@ -12,7 +12,7 @@ from parameters — no stored dome plans.
 ## Decisions (where the spec left options open)
 
 1. **Geometry engine: pure TypeScript** (`src/engine/`, zero DOM/Three deps). The spec lists
-   Rust→WASM as *optional*; a pure-TS module is portable to CLI/desktop later and avoids a
+   Rust→WASM as _optional_; a pure-TS module is portable to CLI/desktop later and avoids a
    toolchain the prototype doesn't need. Engine API is deliberately narrow so a WASM backend
    can replace it behind the same types.
 2. **Subdivision: Class I ("alternate"), Method 1** — subdivide each icosahedron face into ν²
@@ -21,13 +21,13 @@ from parameters — no stored dome plans.
    published dome plans assume. Engine supports ν ≥ 1; UI exposes V3–V6.
 3. **Truncation: vertex-up orientation, cut at planar vertex rings.** With a vertex at the pole,
    vertices fall on discrete z-levels (planar rings). The requested fraction (3/8, 1/2, 5/8)
-   snaps to the nearest ring; the UI reports the *actual* fraction (odd frequencies have no
+   snaps to the nearest ring; the UI reports the _actual_ fraction (odd frequencies have no
    exact hemisphere — standard practice).
 4. **Strut classification:** edges grouped by chord factor within 1e-6 tolerance → types
    A, B, C… ordered shortest-first. Hubs classified by valence + surrounding strut pattern.
 5. **Joint methods** model an end offset per strut end (cut length = chord − 2×offset) plus
-   fabrication notes: *hub connector* (user-set hub radius offset), *flattened pipe/conduit*
-   (hole-to-hole = chord, add flatten allowance), *timber + hub plate* (offset, bevel notes).
+   fabrication notes: _hub connector_ (user-set hub radius offset), _flattened pipe/conduit_
+   (hole-to-hole = chord, add flatten allowance), _timber + hub plate_ (offset, bevel notes).
 6. **Angles reported:** axial angle per strut type (90° − asin(chord/2R), the hub-end cut
    angle) and face dihedrals for panelized builds.
 7. **Optimizer:** scan diameter range at fixed step; per candidate, round each cut length to
@@ -51,6 +51,7 @@ Vue UI (panels)  ←→  useDomeProject (reactive state + derived model)
 ```
 
 ### Engine modules
+
 - `types.ts` — Vertex {id, position, edgeIds, hubType}, Edge {id, v0, v1, chordFactor,
   length, typeId}, Face {id, vertexIds, neighborIds}, StrutType, HubType, DomeModel
 - `icosahedron.ts` — canonical icosahedron, vertex-up rotation
@@ -63,6 +64,7 @@ Vue UI (panels)  ←→  useDomeProject (reactive state + derived model)
 - `exports/` — csv.ts, json.ts, svg.ts, dxf.ts, obj.ts
 
 ### UI
+
 - Left sidebar: parameters (frequency, fraction, diameter, units, material, joint,
   rounding, stock lengths) + optimizer
 - Center: Three.js viewer — modes: assembly / frame / surface / exploded; click strut → type,

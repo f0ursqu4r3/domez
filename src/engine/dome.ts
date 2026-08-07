@@ -1,4 +1,13 @@
-import type { DomeModel, DomeParams, Edge, Face, Fraction, HubType, StrutType, Vertex } from './types'
+import type {
+  DomeModel,
+  DomeParams,
+  Edge,
+  Face,
+  Fraction,
+  HubType,
+  StrutType,
+  Vertex,
+} from './types'
 import { subdivideIcosahedron } from './subdivide'
 import { cross, distance, dot, normalize, sub } from './vec'
 
@@ -8,10 +17,14 @@ const Z_TOL = 1e-6
 /** Target truncation plane z for a nominal fraction of sphere height kept. */
 function targetCutZ(fraction: Fraction): number {
   switch (fraction) {
-    case '3/8': return 0.25
-    case '1/2': return 0
-    case '5/8': return -0.25
-    case 'full': return -1
+    case '3/8':
+      return 0.25
+    case '1/2':
+      return 0
+    case '5/8':
+      return -0.25
+    case 'full':
+      return -1
   }
 }
 
@@ -44,7 +57,11 @@ export function generateDome(params: DomeParams & { baseMode?: 'natural' | 'leve
   // Full-sphere edge list with face adjacency, used to score candidate cuts.
   const sphereEdges = new Map<string, { a: number; b: number; faces: number[] }>()
   sphere.faces.forEach(([a, b, c], fi) => {
-    for (const [x, y] of [[a, b], [b, c], [c, a]] as const) {
+    for (const [x, y] of [
+      [a, b],
+      [b, c],
+      [c, a],
+    ] as const) {
       const key = x < y ? `${x}:${y}` : `${y}:${x}`
       let e = sphereEdges.get(key)
       if (!e) {
@@ -90,7 +107,9 @@ export function generateDome(params: DomeParams & { baseMode?: 'natural' | 'leve
 
   // ---- Keep whole faces above the cut ----
   const vertexKept = sphere.vertices.map((v) => v[2] >= cutZ - Z_TOL)
-  const keptFaces = sphere.faces.filter(([a, b, c]) => vertexKept[a] && vertexKept[b] && vertexKept[c])
+  const keptFaces = sphere.faces.filter(
+    ([a, b, c]) => vertexKept[a] && vertexKept[b] && vertexKept[c],
+  )
 
   // ---- Re-index vertices referenced by surviving faces ----
   const oldToNew = new Map<number, number>()

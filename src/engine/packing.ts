@@ -46,8 +46,13 @@ export function packCuts(cutList: CutList, opts: PackingOptions): PackingResult 
   const stock = opts.stock.slice().sort((a, b) => a.length - b.length)
   if (stock.length === 0) {
     return {
-      boards: [], boardCounts: [], totalStock: 0, totalUsed: 0,
-      totalWaste: 0, wasteFraction: 0, unplaceable: [],
+      boards: [],
+      boardCounts: [],
+      totalStock: 0,
+      totalUsed: 0,
+      totalWaste: 0,
+      wasteFraction: 0,
+      unplaceable: [],
     }
   }
   const longest = stock[stock.length - 1]
@@ -60,7 +65,9 @@ export function packCuts(cutList: CutList, opts: PackingOptions): PackingResult 
   }
   cuts.sort((a, b) => b.length - a.length)
 
-  interface OpenBoard extends PackedBoard { remaining: number }
+  interface OpenBoard extends PackedBoard {
+    remaining: number
+  }
   const boards: OpenBoard[] = []
   const unplaceable: PackedCut[] = []
 
@@ -100,7 +107,11 @@ export function packCuts(cutList: CutList, opts: PackingOptions): PackingResult 
   const totalUsed = boards.reduce((n, b) => n + b.used, 0)
   const countMap = new Map<string, { stockLabel: string; stockLength: number; count: number }>()
   for (const b of boards) {
-    const entry = countMap.get(b.stockLabel) ?? { stockLabel: b.stockLabel, stockLength: b.stockLength, count: 0 }
+    const entry = countMap.get(b.stockLabel) ?? {
+      stockLabel: b.stockLabel,
+      stockLength: b.stockLength,
+      count: 0,
+    }
     entry.count++
     countMap.set(b.stockLabel, entry)
   }

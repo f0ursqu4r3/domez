@@ -28,8 +28,14 @@ const stats = computed(() => [
     <div>
       <h3 class="section-title">Material takeoff — {{ material.label }}</h3>
       <div class="grid grid-cols-2 gap-2">
-        <div v-for="s in stats" :key="s.label" class="rounded-md border border-border bg-card px-3 py-2">
-          <div class="text-[10px] uppercase tracking-widest text-muted-foreground">{{ s.label }}</div>
+        <div
+          v-for="s in stats"
+          :key="s.label"
+          class="rounded-md border border-border bg-card px-3 py-2"
+        >
+          <div class="text-[10px] uppercase tracking-widest text-muted-foreground">
+            {{ s.label }}
+          </div>
           <div class="font-mono text-lg text-foreground">{{ s.value }}</div>
         </div>
       </div>
@@ -51,7 +57,8 @@ const stats = computed(() => [
       </div>
       <div class="flex gap-2 flex-wrap">
         <div
-          v-for="b in packing.boardCounts" :key="b.stockLabel"
+          v-for="b in packing.boardCounts"
+          :key="b.stockLabel"
           class="rounded-md border border-border px-3 py-1.5 font-mono text-sm"
         >
           <span class="text-primary font-semibold">{{ b.count }}×</span> {{ b.stockLabel }}
@@ -64,14 +71,22 @@ const stats = computed(() => [
       <ScrollArea class="flex-1 min-h-0 pr-3">
         <div class="flex flex-col gap-1.5">
           <div v-for="(b, i) in packing.boards" :key="i" class="flex items-center gap-2">
-            <span class="w-16 shrink-0 whitespace-nowrap text-right font-mono text-[11px] text-muted-foreground">
+            <span
+              class="w-16 shrink-0 whitespace-nowrap text-right font-mono text-[11px] text-muted-foreground"
+            >
               #{{ i + 1 }} · {{ b.stockLabel }}
             </span>
-            <div class="relative h-6 flex-1 overflow-hidden rounded-sm border border-border bg-muted/40 flex">
+            <div
+              class="relative h-6 flex-1 overflow-hidden rounded-sm border border-border bg-muted/40 flex"
+            >
               <div
-                v-for="(c, j) in b.cuts" :key="j"
+                v-for="(c, j) in b.cuts"
+                :key="j"
                 class="h-full border-r border-background/70 flex items-center justify-center overflow-hidden"
-                :style="{ width: `${(c.length / b.stockLength) * 100}%`, background: strutColor(c.typeId) + '55' }"
+                :style="{
+                  width: `${(c.length / b.stockLength) * 100}%`,
+                  background: strutColor(c.typeId) + '55',
+                }"
                 :title="`${c.label} — ${formatLength(c.length, state.units)}`"
               >
                 <span class="text-[10px] font-mono text-foreground/90">{{ c.label }}</span>

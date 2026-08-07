@@ -12,7 +12,12 @@ import { Switch } from '@/components/ui/switch'
 import { Separator } from '@/components/ui/separator'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import {
-  Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue,
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
 } from '@/components/ui/select'
 import { Zap } from '@lucide/vue'
 
@@ -44,7 +49,12 @@ const best = computed(() => state.optimizer.result?.best ?? null)
         <Field>
           <FieldLabel>Frequency</FieldLabel>
           <ToggleGroup v-model="frequency" type="single" variant="outline" class="w-full">
-            <ToggleGroupItem v-for="f in ['3', '4', '5', '6']" :key="f" :value="f" class="flex-1 font-mono">
+            <ToggleGroupItem
+              v-for="f in ['3', '4', '5', '6']"
+              :key="f"
+              :value="f"
+              class="flex-1 font-mono"
+            >
               {{ f }}V
             </ToggleGroupItem>
           </ToggleGroup>
@@ -52,13 +62,20 @@ const best = computed(() => state.optimizer.result?.best ?? null)
         <Field>
           <FieldLabel>Sphere fraction</FieldLabel>
           <ToggleGroup v-model="fraction" type="single" variant="outline" class="w-full">
-            <ToggleGroupItem v-for="fr in ['3/8', '1/2', '5/8']" :key="fr" :value="fr" class="flex-1 font-mono">
+            <ToggleGroupItem
+              v-for="fr in ['3/8', '1/2', '5/8']"
+              :key="fr"
+              :value="fr"
+              class="flex-1 font-mono"
+            >
               {{ fr }}
             </ToggleGroupItem>
           </ToggleGroup>
           <FieldDescription>
             Snaps to the nearest clean ring — actual
-            <span class="font-mono text-foreground">{{ (project.summary.value.actualFraction * 100).toFixed(1) }}%</span>
+            <span class="font-mono text-foreground"
+              >{{ (project.summary.value.actualFraction * 100).toFixed(1) }}%</span
+            >
             of sphere height.
           </FieldDescription>
         </Field>
@@ -70,14 +87,21 @@ const best = computed(() => state.optimizer.result?.best ?? null)
           />
         </Field>
         <Field>
-          <FieldLabel>Diameter <span class="text-muted-foreground">({{ unitLabel }})</span></FieldLabel>
+          <FieldLabel
+            >Diameter <span class="text-muted-foreground">({{ unitLabel }})</span></FieldLabel
+          >
           <Input
             type="number"
             :step="state.units === 'imperial' ? 0.125 : 0.05"
             min="1"
             :model-value="diameter"
             class="font-mono"
-            @update:model-value="(v) => { const n = Number(v); if (n > 0) diameter = n }"
+            @update:model-value="
+              (v) => {
+                const n = Number(v)
+                if (n > 0) diameter = n
+              }
+            "
           />
         </Field>
         <Field>
@@ -107,7 +131,9 @@ const best = computed(() => state.optimizer.result?.best ?? null)
             <SelectTrigger class="w-full"><SelectValue /></SelectTrigger>
             <SelectContent>
               <SelectGroup>
-                <SelectItem v-for="m in MATERIALS" :key="m.id" :value="m.id">{{ m.label }}</SelectItem>
+                <SelectItem v-for="m in MATERIALS" :key="m.id" :value="m.id">{{
+                  m.label
+                }}</SelectItem>
               </SelectGroup>
             </SelectContent>
           </Select>
@@ -119,18 +145,31 @@ const best = computed(() => state.optimizer.result?.best ?? null)
             <SelectTrigger class="w-full"><SelectValue /></SelectTrigger>
             <SelectContent>
               <SelectGroup>
-                <SelectItem v-for="j in JOINT_METHODS" :key="j.id" :value="j.id">{{ j.label }}</SelectItem>
+                <SelectItem v-for="j in JOINT_METHODS" :key="j.id" :value="j.id">{{
+                  j.label
+                }}</SelectItem>
               </SelectGroup>
             </SelectContent>
           </Select>
           <FieldDescription>{{ jointMethod.note }}</FieldDescription>
         </Field>
         <Field>
-          <FieldLabel>End offset per strut end <span class="text-muted-foreground">({{ smallUnit }})</span></FieldLabel>
+          <FieldLabel
+            >End offset per strut end
+            <span class="text-muted-foreground">({{ smallUnit }})</span></FieldLabel
+          >
           <Input
-            type="number" step="0.05" min="0" class="font-mono"
+            type="number"
+            step="0.05"
+            min="0"
+            class="font-mono"
             :model-value="endOffset"
-            @update:model-value="(v) => { const n = Number(v); if (n >= 0) endOffset = n }"
+            @update:model-value="
+              (v) => {
+                const n = Number(v)
+                if (n >= 0) endOffset = n
+              }
+            "
           />
         </Field>
       </FieldGroup>
@@ -147,7 +186,12 @@ const best = computed(() => state.optimizer.result?.best ?? null)
             <SelectTrigger class="w-full font-mono"><SelectValue /></SelectTrigger>
             <SelectContent>
               <SelectGroup>
-                <SelectItem v-for="inc in increments" :key="inc.label" :value="String(inc.value)" class="font-mono">
+                <SelectItem
+                  v-for="inc in increments"
+                  :key="inc.label"
+                  :value="String(inc.value)"
+                  class="font-mono"
+                >
                   {{ inc.label }}
                 </SelectItem>
               </SelectGroup>
@@ -155,18 +199,29 @@ const best = computed(() => state.optimizer.result?.best ?? null)
           </Select>
         </Field>
         <Field>
-          <FieldLabel>Saw kerf <span class="text-muted-foreground">({{ smallUnit }})</span></FieldLabel>
+          <FieldLabel
+            >Saw kerf <span class="text-muted-foreground">({{ smallUnit }})</span></FieldLabel
+          >
           <Input
-            type="number" step="0.05" min="0" class="font-mono"
+            type="number"
+            step="0.05"
+            min="0"
+            class="font-mono"
             :model-value="kerf"
-            @update:model-value="(v) => { const n = Number(v); if (n >= 0) kerf = n }"
+            @update:model-value="
+              (v) => {
+                const n = Number(v)
+                if (n >= 0) kerf = n
+              }
+            "
           />
         </Field>
         <Field>
           <FieldLabel>Available stock</FieldLabel>
           <div class="flex flex-col gap-2">
             <label
-              v-for="s in availableStock" :key="s.label"
+              v-for="s in availableStock"
+              :key="s.label"
               class="flex items-center justify-between rounded-md border border-border px-3 py-1.5"
             >
               <span class="font-mono text-sm">{{ s.label }}</span>
@@ -189,14 +244,18 @@ const best = computed(() => state.optimizer.result?.best ?? null)
           <Field class="flex-1">
             <FieldLabel>Min ({{ unitLabel }})</FieldLabel>
             <Input
-              type="number" class="font-mono" :model-value="state.optimizer.min"
+              type="number"
+              class="font-mono"
+              :model-value="state.optimizer.min"
               @update:model-value="(v) => (state.optimizer.min = Number(v))"
             />
           </Field>
           <Field class="flex-1">
             <FieldLabel>Max ({{ unitLabel }})</FieldLabel>
             <Input
-              type="number" class="font-mono" :model-value="state.optimizer.max"
+              type="number"
+              class="font-mono"
+              :model-value="state.optimizer.max"
               @update:model-value="(v) => (state.optimizer.max = Number(v))"
             />
           </Field>
@@ -205,18 +264,33 @@ const best = computed(() => state.optimizer.result?.best ?? null)
           <Zap data-icon="inline-start" />
           Search cleanest diameter
         </Button>
-        <div v-if="best" class="rounded-md border border-primary/40 bg-primary/5 p-3 flex flex-col gap-1.5">
+        <div
+          v-if="best"
+          class="rounded-md border border-primary/40 bg-primary/5 p-3 flex flex-col gap-1.5"
+        >
           <div class="flex items-center justify-between">
-            <span class="text-xs uppercase tracking-widest text-muted-foreground">Best diameter</span>
-            <Badge variant="secondary" class="font-mono">{{ best.diameterDisplay.toFixed(3) }} {{ unitLabel }}</Badge>
+            <span class="text-xs uppercase tracking-widest text-muted-foreground"
+              >Best diameter</span
+            >
+            <Badge variant="secondary" class="font-mono"
+              >{{ best.diameterDisplay.toFixed(3) }} {{ unitLabel }}</Badge
+            >
           </div>
           <p class="text-xs text-muted-foreground leading-relaxed">
-            max cut error <span class="font-mono text-foreground">{{ formatLength(best.maxRoundingError, state.units) }}</span>
-            · waste <span class="font-mono text-foreground">{{ (best.wasteFraction * 100).toFixed(1) }}%</span>
-            · <span class="font-mono text-foreground">{{ best.boardsNeeded }}</span> boards
-            · {{ state.optimizer.result!.evaluated }} candidates
+            max cut error
+            <span class="font-mono text-foreground">{{
+              formatLength(best.maxRoundingError, state.units)
+            }}</span>
+            · waste
+            <span class="font-mono text-foreground"
+              >{{ (best.wasteFraction * 100).toFixed(1) }}%</span
+            >
+            · <span class="font-mono text-foreground">{{ best.boardsNeeded }}</span> boards ·
+            {{ state.optimizer.result!.evaluated }} candidates
           </p>
-          <Button size="sm" variant="outline" @click="project.applyOptimizedDiameter()">Apply diameter</Button>
+          <Button size="sm" variant="outline" @click="project.applyOptimizedDiameter()"
+            >Apply diameter</Button
+          >
         </div>
       </FieldGroup>
     </section>

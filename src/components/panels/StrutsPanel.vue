@@ -3,7 +3,12 @@ import { useDomeProject } from '@/composables/useDomeProject'
 import { formatLength } from '@/engine/units'
 import { strutColor } from '@/engine/exports/svg'
 import {
-  Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
 } from '@/components/ui/table'
 import { Badge } from '@/components/ui/badge'
 
@@ -21,7 +26,11 @@ function selectType(typeId: number) {
       <h3 class="section-title mb-0">Cut list</h3>
       <span class="text-xs text-muted-foreground font-mono">
         {{ cutList.totalStruts }} struts · max err
-        {{ cutList.maxRoundingError < 1e-9 ? '0' : formatLength(cutList.maxRoundingError, state.units) }}
+        {{
+          cutList.maxRoundingError < 1e-9
+            ? '0'
+            : formatLength(cutList.maxRoundingError, state.units)
+        }}
       </span>
     </div>
     <div class="overflow-x-auto rounded-md border border-border">
@@ -49,8 +58,12 @@ function selectType(typeId: number) {
               </span>
             </TableCell>
             <TableCell class="text-right font-mono">{{ r.quantity }}</TableCell>
-            <TableCell class="text-right font-mono">{{ formatLength(r.roundedCutLength, state.units) }}</TableCell>
-            <TableCell class="text-right font-mono text-muted-foreground">{{ r.axialAngleDeg.toFixed(2) }}°</TableCell>
+            <TableCell class="text-right font-mono">{{
+              formatLength(r.roundedCutLength, state.units)
+            }}</TableCell>
+            <TableCell class="text-right font-mono text-muted-foreground"
+              >{{ r.axialAngleDeg.toFixed(2) }}°</TableCell
+            >
             <TableCell class="text-right font-mono text-muted-foreground">
               {{ r.roundingError < 1e-9 ? '—' : formatLength(r.roundingError, state.units) }}
             </TableCell>
@@ -59,10 +72,13 @@ function selectType(typeId: number) {
       </Table>
     </div>
     <p class="text-xs text-muted-foreground leading-relaxed">
-      Cut lengths include the joint end offset
-      (<span class="font-mono">{{ formatLength(endOffset, state.units) }}</span> per end).
-      Hole-to-hole / geometric chord lengths are in the CSV export.
-      <Badge v-if="state.baseMode === 'leveled'" variant="secondary" class="ml-1">leveled base adds types</Badge>
+      Cut lengths include the joint end offset (<span class="font-mono">{{
+        formatLength(endOffset, state.units)
+      }}</span>
+      per end). Hole-to-hole / geometric chord lengths are in the CSV export.
+      <Badge v-if="state.baseMode === 'leveled'" variant="secondary" class="ml-1"
+        >leveled base adds types</Badge
+      >
     </p>
   </div>
 </template>

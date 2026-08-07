@@ -5,25 +5,25 @@ import { packCuts, type StockLength } from '@/engine/packing'
 import { optimizeDiameter, type OptimizeResult } from '@/engine/optimize'
 import { buildAssemblyPlan } from '@/engine/assembly'
 import {
-  diameterToWorking, IMPERIAL_INCREMENTS, METRIC_INCREMENTS,
-} from '@/engine/units'
+  analyzeOpenings,
+  type OpeningAssignments,
+  type OpeningGroup,
+  type OpeningType,
+} from '@/engine/openings'
+import { diameterToWorking, IMPERIAL_INCREMENTS, METRIC_INCREMENTS } from '@/engine/units'
 import type { Fraction, Frequency, UnitSystem } from '@/engine/types'
-import { cutListCsv, hubsCsv, boardsCsv } from '@/engine/exports/csv'
+import { cutListCsv, hubsCsv, boardsCsv, openingsCsv } from '@/engine/exports/csv'
 import { domeObj } from '@/engine/exports/obj'
 import { fabricationSvg, hubLabelsSvg } from '@/engine/exports/svg'
 import { fabricationDxf } from '@/engine/exports/dxf'
 import { projectJson, parseProjectJson } from '@/engine/exports/json'
 
 export type ViewMode = 'assembly' | 'frame' | 'surface' | 'exploded'
-export type Selection =
-  | { kind: 'strut'; edgeId: number }
-  | { kind: 'hub'; vertexId: number }
-  | null
+export type Selection = { kind: 'strut'; edgeId: number } | { kind: 'hub'; vertexId: number } | null
 
 /** Real cross-section of the strut stock, canonical mm. */
 export type StrutSection =
-  | { kind: 'rect'; widthMm: number; depthMm: number }
-  | { kind: 'round'; odMm: number }
+  { kind: 'rect'; widthMm: number; depthMm: number } | { kind: 'round'; odMm: number }
 
 export interface MaterialDef {
   id: string
@@ -42,12 +42,16 @@ export const MATERIALS: MaterialDef[] = [
     section: { kind: 'rect', widthMm: 38, depthMm: 89 },
     stock: {
       imperial: [
-        { length: 96, label: '8 ft' }, { length: 120, label: '10 ft' },
-        { length: 144, label: '12 ft' }, { length: 192, label: '16 ft' },
+        { length: 96, label: '8 ft' },
+        { length: 120, label: '10 ft' },
+        { length: 144, label: '12 ft' },
+        { length: 192, label: '16 ft' },
       ],
       metric: [
-        { length: 2400, label: '2.4 m' }, { length: 3000, label: '3.0 m' },
-        { length: 3600, label: '3.6 m' }, { length: 4800, label: '4.8 m' },
+        { length: 2400, label: '2.4 m' },
+        { length: 3000, label: '3.0 m' },
+        { length: 3600, label: '3.6 m' },
+        { length: 4800, label: '4.8 m' },
       ],
     },
     defaultJoint: 'timber-plate',
@@ -59,11 +63,13 @@ export const MATERIALS: MaterialDef[] = [
     section: { kind: 'rect', widthMm: 38, depthMm: 38 },
     stock: {
       imperial: [
-        { length: 96, label: '8 ft' }, { length: 120, label: '10 ft' },
+        { length: 96, label: '8 ft' },
+        { length: 120, label: '10 ft' },
         { length: 144, label: '12 ft' },
       ],
       metric: [
-        { length: 2400, label: '2.4 m' }, { length: 3000, label: '3.0 m' },
+        { length: 2400, label: '2.4 m' },
+        { length: 3000, label: '3.0 m' },
         { length: 3600, label: '3.6 m' },
       ],
     },
@@ -86,8 +92,14 @@ export const MATERIALS: MaterialDef[] = [
     profile: 'Schedule 40',
     section: { kind: 'round', odMm: 33.4 },
     stock: {
-      imperial: [{ length: 120, label: '10 ft' }, { length: 240, label: '20 ft' }],
-      metric: [{ length: 3000, label: '3.0 m' }, { length: 6000, label: '6.0 m' }],
+      imperial: [
+        { length: 120, label: '10 ft' },
+        { length: 240, label: '20 ft' },
+      ],
+      metric: [
+        { length: 3000, label: '3.0 m' },
+        { length: 6000, label: '6.0 m' },
+      ],
     },
     defaultJoint: 'flattened-pipe',
   },
@@ -97,7 +109,10 @@ export const MATERIALS: MaterialDef[] = [
     profile: '1″ square or round, 16 ga',
     section: { kind: 'round', odMm: 25.4 },
     stock: {
-      imperial: [{ length: 240, label: '20 ft' }, { length: 288, label: '24 ft' }],
+      imperial: [
+        { length: 240, label: '20 ft' },
+        { length: 288, label: '24 ft' },
+      ],
       metric: [{ length: 6000, label: '6.0 m' }],
     },
     defaultJoint: 'hub',
@@ -129,6 +144,12 @@ interface ProjectState {
   explode: number
   /** Render struts at their real cross-section instead of schematic sticks. */
   trueSize: boolean
+  /** Panel opening assignments: faceId -> window | door | vent. */
+  openings: OpeningAssignments
+  /** Active paint tool for viewer panel clicks; 'off' restores strut/hub picking. */
+  openingTool: 'off' | OpeningType | 'erase'
+  /** Opening group label to highlight in the viewer (from the Openings panel). */
+  highlightOpening: string | null
   selection: Selection
   optimizer: {
     min: number
@@ -153,6 +174,9 @@ const state = reactive<ProjectState>({
   viewMode: 'assembly',
   explode: 0.35,
   trueSize: false,
+  openings: {},
+  openingTool: 'off',
+  highlightOpening: null,
   selection: null,
   optimizer: { min: 20, max: 30, result: null, running: false },
 })
@@ -162,8 +186,7 @@ const round3 = (v: number) => Math.round(v * 1000) / 1000
 /** Diameter in display units (feet or meters). Reads round the canonical mm
  * value for display only; writes set the canonical value exactly. */
 const diameter = computed({
-  get: () =>
-    round3(state.diameterMm / (state.units === 'imperial' ? MM_PER_FOOT : MM_PER_METER)),
+  get: () => round3(state.diameterMm / (state.units === 'imperial' ? MM_PER_FOOT : MM_PER_METER)),
   set: (v: number) => {
     if (v > 0) state.diameterMm = v * (state.units === 'imperial' ? MM_PER_FOOT : MM_PER_METER)
   },
@@ -171,7 +194,8 @@ const diameter = computed({
 
 /** End offset in small display units (inches or mm). */
 const endOffset = computed({
-  get: () => round3(state.units === 'imperial' ? state.endOffsetMm / MM_PER_INCH : state.endOffsetMm),
+  get: () =>
+    round3(state.units === 'imperial' ? state.endOffsetMm / MM_PER_INCH : state.endOffsetMm),
   set: (v: number) => {
     if (v >= 0) state.endOffsetMm = state.units === 'imperial' ? v * MM_PER_INCH : v
   },
@@ -233,8 +257,17 @@ const model = computed(() =>
   generateDome({ frequency: state.frequency, fraction: state.fraction, baseMode: state.baseMode }),
 )
 
-// A new model invalidates edge/vertex ids; drop any stale selection.
-watch(model, () => (state.selection = null))
+// A new model invalidates edge/vertex/face ids; drop stale selection and
+// openings. Sync flush so loadProjectFile can restore openings afterwards.
+watch(
+  model,
+  () => {
+    state.selection = null
+    state.openings = {}
+    state.highlightOpening = null
+  },
+  { flush: 'sync' },
+)
 
 // Working units (inches or mm) derive from canonical mm, never from the
 // rounded display values.
@@ -250,7 +283,9 @@ const workingKerf = computed(() =>
 )
 
 const material = computed(() => MATERIALS.find((m) => m.id === state.materialId) ?? MATERIALS[0])
-const jointMethod = computed(() => JOINT_METHODS.find((j) => j.id === state.jointId) ?? JOINT_METHODS[0])
+const jointMethod = computed(
+  () => JOINT_METHODS.find((j) => j.id === state.jointId) ?? JOINT_METHODS[0],
+)
 
 /** Material cross-section in working units (inches or mm) for rendering. */
 const strutSectionWorking = computed(() => {
@@ -262,7 +297,9 @@ const strutSectionWorking = computed(() => {
 })
 
 const availableStock = computed(() => material.value.stock[state.units])
-const activeStock = computed(() => availableStock.value.filter((s) => !state.disabledStock[s.label]))
+const activeStock = computed(() =>
+  availableStock.value.filter((s) => !state.disabledStock[s.label]),
+)
 
 const cutList = computed(() =>
   buildCutList(model.value, {
@@ -278,7 +315,34 @@ const packing = computed(() =>
 )
 const assemblyPlan = computed(() => buildAssemblyPlan(model.value))
 
-const increments = computed(() => (state.units === 'imperial' ? IMPERIAL_INCREMENTS : METRIC_INCREMENTS))
+const openingGroups = computed<OpeningGroup[]>(() =>
+  analyzeOpenings(model.value, state.openings, radius.value),
+)
+
+/** Paint/erase a panel with the active opening tool (viewer click handler). */
+function paintFace(faceId: number) {
+  if (state.openingTool === 'off') return
+  if (state.openingTool === 'erase') {
+    delete state.openings[faceId]
+  } else {
+    state.openings[faceId] = state.openingTool
+  }
+  state.highlightOpening = null
+}
+
+function removeOpeningGroup(group: OpeningGroup) {
+  for (const fid of group.faceIds) delete state.openings[fid]
+  if (state.highlightOpening === group.label) state.highlightOpening = null
+}
+
+function clearOpenings() {
+  state.openings = {}
+  state.highlightOpening = null
+}
+
+const increments = computed(() =>
+  state.units === 'imperial' ? IMPERIAL_INCREMENTS : METRIC_INCREMENTS,
+)
 
 const summary = computed(() => {
   const m = model.value
@@ -330,7 +394,8 @@ function download(filename: string, content: string | Blob, type = 'text/plain')
 }
 
 const fileStem = computed(
-  () => `domez-${state.frequency}v-${state.fraction.replace('/', '')}-${diameter.value}${state.units === 'imperial' ? 'ft' : 'm'}`,
+  () =>
+    `domez-${state.frequency}v-${state.fraction.replace('/', '')}-${diameter.value}${state.units === 'imperial' ? 'ft' : 'm'}`,
 )
 
 const projectSettings = computed(() => ({
@@ -345,20 +410,46 @@ const projectSettings = computed(() => ({
   increment: state.increment,
   kerf: kerf.value,
   stock: activeStock.value,
+  openings: { ...state.openings },
 }))
 
 const exporters = {
-  csv: () => download(`${fileStem.value}-cutlist.csv`, cutListCsv(cutList.value, state.units), 'text/csv'),
+  csv: () =>
+    download(`${fileStem.value}-cutlist.csv`, cutListCsv(cutList.value, state.units), 'text/csv'),
   hubsCsv: () => download(`${fileStem.value}-hubs.csv`, hubsCsv(model.value), 'text/csv'),
-  boardsCsv: () => download(`${fileStem.value}-boards.csv`, boardsCsv(packing.value, state.units), 'text/csv'),
+  boardsCsv: () =>
+    download(`${fileStem.value}-boards.csv`, boardsCsv(packing.value, state.units), 'text/csv'),
+  openingsCsv: () =>
+    download(
+      `${fileStem.value}-openings.csv`,
+      openingsCsv(openingGroups.value, state.units),
+      'text/csv',
+    ),
   svg: () =>
-    download(`${fileStem.value}-fabrication.svg`, fabricationSvg(model.value, cutList.value, state.units, titleOf()), 'image/svg+xml'),
+    download(
+      `${fileStem.value}-fabrication.svg`,
+      fabricationSvg(model.value, cutList.value, state.units, titleOf()),
+      'image/svg+xml',
+    ),
   labelsSvg: () =>
-    download(`${fileStem.value}-hub-labels.svg`, hubLabelsSvg(model.value, assemblyPlan.value, titleOf()), 'image/svg+xml'),
-  dxf: () => download(`${fileStem.value}.dxf`, fabricationDxf(model.value, cutList.value, radius.value), 'application/dxf'),
+    download(
+      `${fileStem.value}-hub-labels.svg`,
+      hubLabelsSvg(model.value, assemblyPlan.value, titleOf()),
+      'image/svg+xml',
+    ),
+  dxf: () =>
+    download(
+      `${fileStem.value}.dxf`,
+      fabricationDxf(model.value, cutList.value, radius.value),
+      'application/dxf',
+    ),
   obj: () => download(`${fileStem.value}.obj`, domeObj(model.value, radius.value), 'model/obj'),
   json: () =>
-    download(`${fileStem.value}.json`, projectJson(projectSettings.value, model.value, cutList.value, packing.value), 'application/json'),
+    download(
+      `${fileStem.value}.json`,
+      projectJson(projectSettings.value, model.value, cutList.value, packing.value),
+      'application/json',
+    ),
   gltf: async () => {
     const [{ buildDomeGroup }, { GLTFExporter }] = await Promise.all([
       import('@/lib/three-builders'),
@@ -368,6 +459,7 @@ const exporters = {
       mode: 'assembly',
       explode: 0,
       strutSection: state.trueSize ? strutSectionWorking.value : undefined,
+      openings: state.openings,
     })
     const exporter = new GLTFExporter()
     const result = await exporter.parseAsync(group, { binary: true })
@@ -396,6 +488,22 @@ function loadProjectFile(text: string): boolean {
   endOffset.value = settings.endOffset
   kerf.value = settings.kerf
   state.increment = settings.increment
+  // Restore openings after the sync model watcher has cleared them,
+  // dropping any face ids or types that don't fit the loaded model.
+  const openings: OpeningAssignments = {}
+  const faceCount = model.value.faces.length
+  for (const [key, type] of Object.entries(settings.openings ?? {})) {
+    const fid = Number(key)
+    if (
+      Number.isInteger(fid) &&
+      fid >= 0 &&
+      fid < faceCount &&
+      (type === 'window' || type === 'door' || type === 'vent')
+    ) {
+      openings[fid] = type
+    }
+  }
+  state.openings = openings
   state.selection = null
   return true
 }
@@ -417,6 +525,10 @@ export function useDomeProject() {
     cutList,
     packing,
     assemblyPlan,
+    openingGroups,
+    paintFace,
+    removeOpeningGroup,
+    clearOpenings,
     increments,
     summary,
     runOptimizer,

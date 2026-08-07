@@ -5,6 +5,7 @@ import { generateDome } from '../dome'
 import { buildCutList } from '../cutlist'
 import { packCuts } from '../packing'
 import { optimizeDiameter } from '../optimize'
+import { analyzeOpenings } from '../openings'
 import { formatFeetInches, formatInchesFractional, roundToIncrement } from '../units'
 import { cross, dot, sub, add, length } from '../vec'
 
@@ -35,7 +36,11 @@ describe('subdivision (class I, method 1)', () => {
     expect(s.faces).toHaveLength(20 * f * f)
     const edges = new Set<string>()
     for (const [a, b, c] of s.faces) {
-      for (const [x, y] of [[a, b], [b, c], [c, a]]) {
+      for (const [x, y] of [
+        [a, b],
+        [b, c],
+        [c, a],
+      ]) {
         edges.add(x < y ? `${x}:${y}` : `${y}:${x}`)
       }
     }
@@ -117,7 +122,8 @@ describe('dome truncation', () => {
   it('classifies hubs: 5V 5/8 apex is a 5-way hub, interior 5- or 6-way', () => {
     const dome = generateDome({ frequency: 5, fraction: '5/8' })
     const apex = dome.vertices.find(
-      (v) => Math.abs(v.position[0]) < 1e-9 && Math.abs(v.position[1]) < 1e-9 && v.position[2] > 0.99,
+      (v) =>
+        Math.abs(v.position[0]) < 1e-9 && Math.abs(v.position[1]) < 1e-9 && v.position[2] > 0.99,
     )!
     expect(apex.edgeIds).toHaveLength(5)
     for (const v of dome.vertices) {
@@ -133,7 +139,12 @@ describe('cut list', () => {
   const dome = generateDome({ frequency: 5, fraction: '5/8' })
 
   it('bounds rounding error by half the increment', () => {
-    const cl = buildCutList(dome, { radius: 156, increment: 1 / 8, endOffset: 2, units: 'imperial' })
+    const cl = buildCutList(dome, {
+      radius: 156,
+      increment: 1 / 8,
+      endOffset: 2,
+      units: 'imperial',
+    })
     for (const row of cl.rows) {
       expect(row.roundingError).toBeLessThanOrEqual(1 / 16 + 1e-12)
       expect(row.exactCutLength).toBeCloseTo(row.chordLength - 4, 9)
@@ -151,7 +162,12 @@ describe('cut list', () => {
 describe('packing', () => {
   it('packs all cuts within stock and reports non-negative waste', () => {
     const dome = generateDome({ frequency: 3, fraction: '5/8' })
-    const cl = buildCutList(dome, { radius: 150, increment: 1 / 8, endOffset: 0, units: 'imperial' })
+    const cl = buildCutList(dome, {
+      radius: 150,
+      increment: 1 / 8,
+      endOffset: 0,
+      units: 'imperial',
+    })
     const stock = [
       { length: 96, label: '8 ft' },
       { length: 120, label: '10 ft' },
@@ -194,6 +210,49 @@ describe('diameter optimizer', () => {
     expect(result.best!.diameter).toBeLessThanOrEqual(360)
     expect(result.evaluated).toBeGreaterThan(100)
     expect(result.best!.maxRoundingError).toBeLessThanOrEqual(1 / 16)
+  })
+})
+
+describe('openings', () => {
+  const dome = generateDome({ frequency: 3, fraction: '5/8' })
+
+  it('merges adjacent same-type faces into one group with framed-out interior struts', () => {
+    const f0 = dome.faces[0]
+    const neighbor = f0.neighborIds[0]
+    const groups = analyzeOpenings(dome, { [f0.id]: 'door', [neighbor]: 'door' }, 100)
+    expect(groups).toHaveLength(1)
+    const g = groups[0]
+    expect(g.type).toBe('door')
+    expect(g.label).toBe('D1')
+    expect(g.faceIds).toHaveLength(2)
+    // Two triangles sharing exactly one edge: 1 interior, 4 perimeter struts.
+    expect(g.interiorEdgeIds).toHaveLength(1)
+    expect(g.area).toBeGreaterThan(0)
+    expect(g.perimeter).toBeGreaterThan(0)
+    expect(g.interiorSummary).toMatch(/1× [A-Z]/)
+  })
+
+  it('keeps disjoint same-type faces as separate numbered groups', () => {
+    // Two faces that are not neighbors.
+    const f0 = dome.faces[0]
+    const far = dome.faces.find((f) => !f0.neighborIds.includes(f.id) && f.id !== f0.id)!
+    const groups = analyzeOpenings(dome, { [f0.id]: 'window', [far.id]: 'window' }, 100)
+    expect(groups).toHaveLength(2)
+    expect(groups.map((g) => g.label).sort()).toEqual(['W1', 'W2'])
+  })
+
+  it('flags door groups that reach the base ring', () => {
+    const baseFace = dome.faces.find((f) => f.vertexIds.some((vi) => dome.vertices[vi].isBase))!
+    const apexFace = dome.faces.find((f) => !f.vertexIds.some((vi) => dome.vertices[vi].isBase))!
+    const groups = analyzeOpenings(dome, { [baseFace.id]: 'door', [apexFace.id]: 'window' }, 100)
+    expect(groups.find((g) => g.type === 'door')!.reachesBase).toBe(true)
+    expect(groups.find((g) => g.type === 'window')!.reachesBase).toBe(false)
+  })
+
+  it('scales area with radius squared', () => {
+    const one = analyzeOpenings(dome, { 0: 'window' }, 1)[0]
+    const hundred = analyzeOpenings(dome, { 0: 'window' }, 10)[0]
+    expect(hundred.area / one.area).toBeCloseTo(100, 9)
   })
 })
 

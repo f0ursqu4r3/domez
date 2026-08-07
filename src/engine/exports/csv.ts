@@ -1,5 +1,6 @@
 import type { CutList } from '../cutlist'
 import type { PackingResult } from '../packing'
+import type { OpeningGroup } from '../openings'
 import type { DomeModel, UnitSystem } from '../types'
 import { formatLength } from '../units'
 
@@ -12,21 +13,34 @@ const row = (...cells: (string | number)[]) => cells.map(esc).join(',')
 export function cutListCsv(cutList: CutList, units: UnitSystem): string {
   const unit = units === 'imperial' ? 'in' : 'mm'
   const lines = [
-    row('Strut', 'Qty', `Cut length (${unit})`, 'Cut length (display)', `Exact (${unit})`,
-      `Rounding error (${unit})`, `Chord (${unit})`, 'Axial angle (deg)', 'Dihedral (deg)'),
+    row(
+      'Strut',
+      'Qty',
+      `Cut length (${unit})`,
+      'Cut length (display)',
+      `Exact (${unit})`,
+      `Rounding error (${unit})`,
+      `Chord (${unit})`,
+      'Axial angle (deg)',
+      'Dihedral (deg)',
+    ),
   ]
   for (const r of cutList.rows) {
-    lines.push(row(
-      r.label,
-      r.quantity,
-      r.roundedCutLength.toFixed(4),
-      formatLength(r.roundedCutLength, units),
-      r.exactCutLength.toFixed(4),
-      r.roundingError.toFixed(4),
-      r.chordLength.toFixed(4),
-      r.axialAngleDeg.toFixed(2),
-      Number.isNaN(r.dihedralMinDeg) ? '' : `${r.dihedralMinDeg.toFixed(2)}–${r.dihedralMaxDeg.toFixed(2)}`,
-    ))
+    lines.push(
+      row(
+        r.label,
+        r.quantity,
+        r.roundedCutLength.toFixed(4),
+        formatLength(r.roundedCutLength, units),
+        r.exactCutLength.toFixed(4),
+        r.roundingError.toFixed(4),
+        r.chordLength.toFixed(4),
+        r.axialAngleDeg.toFixed(2),
+        Number.isNaN(r.dihedralMinDeg)
+          ? ''
+          : `${r.dihedralMinDeg.toFixed(2)}–${r.dihedralMaxDeg.toFixed(2)}`,
+      ),
+    )
   }
   lines.push('')
   lines.push(row('Total struts', cutList.totalStruts))
@@ -43,17 +57,52 @@ export function hubsCsv(model: DomeModel): string {
   return lines.join('\n')
 }
 
+export function openingsCsv(groups: OpeningGroup[], units: UnitSystem): string {
+  const unit = units === 'imperial' ? 'in' : 'mm'
+  const areaUnit = units === 'imperial' ? 'ft2' : 'm2'
+  const areaOf = (a: number) => (units === 'imperial' ? a / 144 : a / 1e6)
+  const lines = [
+    row(
+      'Opening',
+      'Type',
+      'Panels',
+      `Area (${areaUnit})`,
+      `Perimeter (${unit})`,
+      'Frame-out struts',
+      'Perimeter struts',
+      'Reaches base',
+    ),
+  ]
+  for (const g of groups) {
+    lines.push(
+      row(
+        g.label,
+        g.type,
+        g.faceIds.length,
+        areaOf(g.area).toFixed(2),
+        g.perimeter.toFixed(2),
+        g.interiorSummary || '—',
+        g.perimeterSummary,
+        g.reachesBase ? 'yes' : 'no',
+      ),
+    )
+  }
+  return lines.join('\n')
+}
+
 export function boardsCsv(packing: PackingResult, units: UnitSystem): string {
   const unit = units === 'imperial' ? 'in' : 'mm'
   const lines = [row('Board #', 'Stock', 'Cuts', `Used (${unit})`, `Waste (${unit})`)]
   packing.boards.forEach((b, i) => {
-    lines.push(row(
-      i + 1,
-      b.stockLabel,
-      b.cuts.map((c) => `${c.label} ${formatLength(c.length, units)}`).join(' | '),
-      b.used.toFixed(2),
-      b.waste.toFixed(2),
-    ))
+    lines.push(
+      row(
+        i + 1,
+        b.stockLabel,
+        b.cuts.map((c) => `${c.label} ${formatLength(c.length, units)}`).join(' | '),
+        b.used.toFixed(2),
+        b.waste.toFixed(2),
+      ),
+    )
   })
   return lines.join('\n')
 }

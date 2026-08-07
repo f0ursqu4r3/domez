@@ -1,5 +1,6 @@
 import * as THREE from 'three'
 import type { DomeModel } from '@/engine/types'
+import type { OpeningAssignments, OpeningType } from '@/engine/openings'
 import { strutColor } from '@/engine/exports/svg'
 import type { ViewMode } from '@/composables/useDomeProject'
 
@@ -16,8 +17,11 @@ export interface BuildOptions {
    * dimensionally accurate: rectangular boards (depth oriented radially,
    * as timber domes are built) or round tube at true OD. */
   strutSection?:
-    | { kind: 'rect'; width: number; depth: number }
-    | { kind: 'round'; diameter: number }
+    { kind: 'rect'; width: number; depth: number } | { kind: 'round'; diameter: number }
+  /** Panel opening assignments: faceId -> window | door | vent. */
+  openings?: OpeningAssignments
+  /** Face ids to render highlighted (opening group hover/selection). */
+  highlightFaces?: number[]
 }
 
 export interface DomePickMaps {
@@ -25,6 +29,8 @@ export interface DomePickMaps {
   strutMaps: Map<THREE.InstancedMesh, number[]>
   hubMesh: THREE.InstancedMesh | null
   hubMap: number[]
+  /** triangle index per panel mesh -> faceId */
+  panelMaps: Map<THREE.Mesh, number[]>
 }
 
 const UP = new THREE.Vector3(0, 1, 0)
@@ -42,7 +48,12 @@ export function buildDomeGroup(
   opts: BuildOptions,
 ): THREE.Group & { userData: { pick: DomePickMaps } } {
   const group = new THREE.Group()
-  const pick: DomePickMaps = { strutMaps: new Map(), hubMesh: null, hubMap: [] }
+  const pick: DomePickMaps = {
+    strutMaps: new Map(),
+    hubMesh: null,
+    hubMap: [],
+    panelMaps: new Map(),
+  }
   group.userData.pick = pick
 
   const explodeDist = opts.mode === 'exploded' ? opts.explode * radius * 0.45 : 0
@@ -136,11 +147,16 @@ export function buildDomeGroup(
     const m = new THREE.Matrix4()
     model.vertices.forEach((v, i) => {
       const p = toThree(v.position, radius)
-      if (explodeDist > 0) p.add(p.clone().normalize().multiplyScalar(explodeDist * 1.15))
+      if (explodeDist > 0)
+        p.add(
+          p
+            .clone()
+            .normalize()
+            .multiplyScalar(explodeDist * 1.15),
+        )
       m.makeScale(hubR, hubR, hubR).setPosition(p)
       mesh.setMatrixAt(i, m)
-      const color =
-        v.id === selHub ? '#ffffff' : v.isBase ? '#f59e0b' : '#c7ced9'
+      const color = v.id === selHub ? '#ffffff' : v.isBase ? '#f59e0b' : '#c7ced9'
       mesh.setColorAt(i, new THREE.Color(color))
       pick.hubMap.push(v.id)
     })
@@ -150,42 +166,91 @@ export function buildDomeGroup(
     group.add(mesh)
   }
 
-  // ---- Panels ----
+  // ---- Panels, one mesh per opening kind so each gets its own material ----
   if (showPanels) {
-    const positions: number[] = []
-    const normals: number[] = []
+    const openings = opts.openings ?? {}
+    const highlighted = new Set(opts.highlightFaces ?? [])
+    const surface = opts.mode === 'surface'
+
+    type PanelKind = 'solid' | OpeningType
+    const buckets = new Map<string, { kind: PanelKind; highlight: boolean; faceIds: number[] }>()
     for (const f of model.faces) {
-      const pts = f.vertexIds.map((vi) => toThree(model.vertices[vi].position, radius))
-      const centroid = pts[0].clone().add(pts[1]).add(pts[2]).multiplyScalar(1 / 3)
-      const offset =
-        explodeDist > 0 ? centroid.clone().normalize().multiplyScalar(explodeDist * 0.8) : null
-      // (x,z,-y) is a proper rotation: engine's outward CCW winding survives.
-      const tri = [pts[0], pts[1], pts[2]]
-      const n = new THREE.Vector3()
-        .subVectors(tri[1], tri[0])
-        .cross(new THREE.Vector3().subVectors(tri[2], tri[0]))
-        .normalize()
-      for (const p of tri) {
-        const q = offset ? p.clone().add(offset) : p
-        positions.push(q.x, q.y, q.z)
-        normals.push(n.x, n.y, n.z)
+      const kind: PanelKind = openings[f.id] ?? 'solid'
+      const highlight = highlighted.has(f.id)
+      const key = `${kind}:${highlight}`
+      let bucket = buckets.get(key)
+      if (!bucket) {
+        bucket = { kind, highlight, faceIds: [] }
+        buckets.set(key, bucket)
       }
+      bucket.faceIds.push(f.id)
     }
-    const geo = new THREE.BufferGeometry()
-    geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3))
-    geo.setAttribute('normal', new THREE.Float32BufferAttribute(normals, 3))
-    const mat = new THREE.MeshStandardMaterial({
-      color: 0x1c2735,
-      roughness: 0.85,
-      metalness: 0.05,
-      transparent: opts.mode !== 'surface',
-      opacity: opts.mode === 'surface' ? 1 : 0.42,
-      side: THREE.DoubleSide,
-      depthWrite: opts.mode === 'surface',
-    })
-    const mesh = new THREE.Mesh(geo, mat)
-    mesh.name = 'panels'
-    group.add(mesh)
+
+    const materialFor = (kind: PanelKind, highlight: boolean): THREE.MeshStandardMaterial => {
+      const spec = {
+        solid: { color: 0x1c2735, opacity: surface ? 1 : 0.42, roughness: 0.85, metalness: 0.05 },
+        window: {
+          color: 0x8ecbff,
+          opacity: surface ? 0.45 : 0.22,
+          roughness: 0.15,
+          metalness: 0.3,
+        },
+        door: { color: 0xc9873a, opacity: surface ? 1 : 0.8, roughness: 0.7, metalness: 0.05 },
+        vent: { color: 0x7fe0b2, opacity: surface ? 0.35 : 0.12, roughness: 0.4, metalness: 0.1 },
+      }[kind]
+      const transparent = spec.opacity < 1
+      return new THREE.MeshStandardMaterial({
+        color: spec.color,
+        roughness: spec.roughness,
+        metalness: spec.metalness,
+        transparent,
+        opacity: spec.opacity,
+        side: THREE.DoubleSide,
+        depthWrite: !transparent,
+        emissive: highlight ? 0xffffff : 0x000000,
+        emissiveIntensity: highlight ? 0.35 : 0,
+      })
+    }
+
+    for (const bucket of buckets.values()) {
+      const positions: number[] = []
+      const normals: number[] = []
+      const faceMap: number[] = []
+      for (const fid of bucket.faceIds) {
+        const f = model.faces[fid]
+        const pts = f.vertexIds.map((vi) => toThree(model.vertices[vi].position, radius))
+        const centroid = pts[0]
+          .clone()
+          .add(pts[1])
+          .add(pts[2])
+          .multiplyScalar(1 / 3)
+        const offset =
+          explodeDist > 0
+            ? centroid
+                .clone()
+                .normalize()
+                .multiplyScalar(explodeDist * 0.8)
+            : null
+        // (x,z,-y) is a proper rotation: engine's outward CCW winding survives.
+        const n = new THREE.Vector3()
+          .subVectors(pts[1], pts[0])
+          .cross(new THREE.Vector3().subVectors(pts[2], pts[0]))
+          .normalize()
+        for (const p of pts) {
+          const q = offset ? p.clone().add(offset) : p
+          positions.push(q.x, q.y, q.z)
+          normals.push(n.x, n.y, n.z)
+        }
+        faceMap.push(fid)
+      }
+      const geo = new THREE.BufferGeometry()
+      geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3))
+      geo.setAttribute('normal', new THREE.Float32BufferAttribute(normals, 3))
+      const mesh = new THREE.Mesh(geo, materialFor(bucket.kind, bucket.highlight))
+      mesh.name = `panels-${bucket.kind}${bucket.highlight ? '-hl' : ''}`
+      pick.panelMaps.set(mesh, faceMap)
+      group.add(mesh)
+    }
   }
 
   return group as THREE.Group & { userData: { pick: DomePickMaps } }

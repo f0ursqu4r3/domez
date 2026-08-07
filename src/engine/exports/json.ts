@@ -14,6 +14,8 @@ export interface ProjectSettings {
   increment: number
   kerf: number
   stock: { length: number; label: string }[]
+  /** Panel opening assignments: faceId -> window | door | vent. */
+  openings?: Record<string, string>
 }
 
 /** Round-trippable project file: settings drive the app; derived data is

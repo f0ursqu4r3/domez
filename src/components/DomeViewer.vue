@@ -5,7 +5,7 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { useDomeProject } from '@/composables/useDomeProject'
 import { buildDomeGroup, type DomePickMaps } from '@/lib/three-builders'
 
-const { state, model, radius, strutSectionWorking } = useDomeProject()
+const { state, model, radius, strutSectionWorking, openingGroups, paintFace } = useDomeProject()
 
 const container = ref<HTMLDivElement | null>(null)
 let renderer: THREE.WebGLRenderer | null = null
@@ -36,11 +36,16 @@ function rebuildDome() {
     scene.remove(domeGroup)
     disposeGroup(domeGroup)
   }
+  const highlightFaces = state.highlightOpening
+    ? openingGroups.value.find((g) => g.label === state.highlightOpening)?.faceIds
+    : undefined
   domeGroup = buildDomeGroup(model.value, radius.value, {
     mode: state.viewMode,
     explode: state.explode,
     selection: state.selection,
     strutSection: state.trueSize ? strutSectionWorking.value : undefined,
+    openings: state.openings,
+    highlightFaces,
   })
   scene.add(domeGroup)
 }
@@ -84,6 +89,18 @@ function onPointerUp(ev: PointerEvent) {
   pointer.y = -((ev.clientY - rect.top) / rect.height) * 2 + 1
   raycaster.setFromCamera(pointer, camera)
   const pick = domeGroup.userData.pick as DomePickMaps
+
+  // Opening tool active: clicks paint panels instead of selecting parts.
+  if (state.openingTool !== 'off') {
+    const panelHits = raycaster.intersectObjects([...pick.panelMaps.keys()], false)
+    const panelHit = panelHits[0]
+    if (panelHit && panelHit.faceIndex != null) {
+      const map = pick.panelMaps.get(panelHit.object as THREE.Mesh)
+      const faceId = map?.[panelHit.faceIndex]
+      if (faceId !== undefined) paintFace(faceId)
+    }
+    return
+  }
 
   const meshes: THREE.Object3D[] = [...pick.strutMaps.keys()]
   if (pick.hubMesh) meshes.push(pick.hubMesh)
@@ -157,7 +174,15 @@ watch([model, radius], () => {
   frameCamera()
 })
 watch(
-  () => [state.viewMode, state.explode, state.selection, state.trueSize, strutSectionWorking.value],
+  () => [
+    state.viewMode,
+    state.explode,
+    state.selection,
+    state.trueSize,
+    strutSectionWorking.value,
+    state.openings,
+    state.highlightOpening,
+  ],
   () => rebuildDome(),
   { deep: true },
 )

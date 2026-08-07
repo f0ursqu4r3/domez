@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Separator } from '@/components/ui/separator'
 import { Input } from '@/components/ui/input'
+import { Switch } from '@/components/ui/switch'
 import { Field, FieldLabel } from '@/components/ui/field'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '@/components/ui/empty'
@@ -103,7 +104,16 @@ function toggleHighlight(label: string) {
 
     <!-- Parametric doorways -->
     <section v-if="doorway.doors.length > 0" class="flex flex-col gap-2">
-      <h3 class="section-title mb-0">Doorways</h3>
+      <div class="flex items-center justify-between">
+        <h3 class="section-title mb-0">Doorways</h3>
+        <label class="flex items-center gap-2 text-xs text-muted-foreground">
+          Close shell to buck
+          <Switch
+            :model-value="state.closeDoorways"
+            @update:model-value="(v: boolean) => (state.closeDoorways = v)"
+          />
+        </label>
+      </div>
       <div
         v-for="(door, i) in doorway.doors"
         :key="door.id"
@@ -171,6 +181,12 @@ function toggleHighlight(label: string) {
           <dd class="text-right font-mono">{{ door.removedHubCount }}</dd>
           <dt class="text-muted-foreground">Buck plane inset</dt>
           <dd class="text-right font-mono">{{ formatLength(door.tunnelDepth, state.units) }}</dd>
+          <template v-if="state.closeDoorways && door.fits">
+            <dt class="text-muted-foreground">Closure sheathing</dt>
+            <dd class="text-right font-mono">
+              sides {{ areaText(door.closureSideArea) }} · top {{ areaText(door.closureTopArea) }}
+            </dd>
+          </template>
         </dl>
 
         <Button size="sm" variant="outline" class="w-full" @click="optimizePlacement(i)">
@@ -198,6 +214,10 @@ function toggleHighlight(label: string) {
         <p v-else class="text-xs text-muted-foreground leading-relaxed">
           Trimmed struts († rows in the cut list) land square on the buck. Jambs anchor to the
           foundation; the header carries the interrupted struts.
+          <template v-if="state.closeDoorways">
+            The extruded entry is closed with sheet goods: two side walls and a flat top from the
+            buck out to the shell — trimmed struts land along those closure edges.
+          </template>
         </p>
       </div>
     </section>

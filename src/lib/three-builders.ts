@@ -26,6 +26,9 @@ export interface BuildOptions {
   /** Parametric doorway cuts: removed geometry is skipped, trimmed struts
    * render as their surviving pieces, and each door gets its buck frame. */
   doorway?: DoorwayCut
+  /** Render the extruded-entry closure sealing the shell back to each buck
+   * (side walls + top from the buck plane out to the sphere). Default true. */
+  closeDoorways?: boolean
 }
 
 export interface DomePickMaps {
@@ -209,6 +212,66 @@ export function buildDomeGroup(
         base.clone().setY(z0 + door.height + memberW / 2),
         door.width + 2 * memberW, memberW, memberD,
       )
+
+      // ---- Extruded-entry closure: seal the shell back to the buck ----
+      if (opts.closeDoorways !== false) {
+        const zTop = z0 + door.height
+        const positions: number[] = []
+        const pushQuadStrip = (
+          inner: (s: number) => THREE.Vector3,
+          outer: (s: number) => THREE.Vector3,
+          segments: number,
+        ) => {
+          for (let i = 0; i < segments; i++) {
+            const s0 = i / segments
+            const s1 = (i + 1) / segments
+            const a0 = inner(s0)
+            const a1 = inner(s1)
+            const b0 = outer(s0)
+            const b1 = outer(s1)
+            positions.push(a0.x, a0.y, a0.z, b0.x, b0.y, b0.z, b1.x, b1.y, b1.z)
+            positions.push(a0.x, a0.y, a0.z, b1.x, b1.y, b1.z, a1.x, a1.y, a1.z)
+          }
+        }
+        const shellU = (z: number, t: number) =>
+          Math.max(door.framePlaneDist, Math.sqrt(Math.max(0, radius * radius - z * z - t * t)))
+        // Side walls at ±width/2, base plane to header height.
+        for (const side of [-1, 1]) {
+          const t = side * half
+          pushQuadStrip(
+            (s) =>
+              u.clone().multiplyScalar(door.framePlaneDist).addScaledVector(tv, t).setY(z0 + s * door.height),
+            (s) =>
+              u.clone().multiplyScalar(shellU(z0 + s * door.height, t)).addScaledVector(tv, t).setY(z0 + s * door.height),
+            10,
+          )
+        }
+        // Flat top at header height, out to the sphere.
+        pushQuadStrip(
+          (s) =>
+            u.clone().multiplyScalar(door.framePlaneDist).addScaledVector(tv, -half + s * door.width).setY(zTop),
+          (s) =>
+            u.clone().multiplyScalar(shellU(zTop, -half + s * door.width)).addScaledVector(tv, -half + s * door.width).setY(zTop),
+          12,
+        )
+        const closureGeo = new THREE.BufferGeometry()
+        closureGeo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3))
+        closureGeo.computeVertexNormals()
+        const closure = new THREE.Mesh(
+          closureGeo,
+          new THREE.MeshStandardMaterial({
+            color: 0xc9873a,
+            roughness: 0.75,
+            metalness: 0.05,
+            transparent: opts.mode !== 'surface',
+            opacity: opts.mode === 'surface' ? 1 : 0.5,
+            side: THREE.DoubleSide,
+            depthWrite: opts.mode === 'surface',
+          }),
+        )
+        closure.name = `door-closure-${door.id}`
+        group.add(closure)
+      }
     }
   }
 

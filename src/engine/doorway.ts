@@ -41,6 +41,11 @@ export interface DoorFrameInfo extends DoorSpec {
   removedPanelCount: number
   /** Door slab area, width × height. */
   area: number
+  /** Closure ("extruded entry") sheathing that seals the shell back to the
+   * buck: two vertical side walls and a flat top, from the buck plane out
+   * to the sphere surface. Working units². Zero when the door doesn't fit. */
+  closureSideArea: number
+  closureTopArea: number
 }
 
 export interface DoorwayCut {
@@ -185,22 +190,41 @@ export function cutDoorways(
 
   const perDoor = new Map<string, DoorFrameInfo>()
   const rBase = Math.sqrt(Math.max(0, radius * radius - z0 * z0))
+
+  // Simpson integration of max(0, f(x)) over [a, b].
+  const integrate = (f: (x: number) => number, a: number, b: number): number => {
+    const n = 32
+    const h = (b - a) / n
+    let sum = Math.max(0, f(a)) + Math.max(0, f(b))
+    for (let i = 1; i < n; i++) sum += Math.max(0, f(a + i * h)) * (i % 2 === 0 ? 2 : 4)
+    return (sum * h) / 3
+  }
+
   for (const spec of doors) {
     const zTop = z0 + spec.height
-    const fitSq = radius * radius - zTop * zTop - (spec.width / 2) ** 2
-    const framePlaneDist = fitSq > 0 ? Math.sqrt(fitSq) : 0
+    const halfW = spec.width / 2
+    const fitSq = radius * radius - zTop * zTop - halfW * halfW
+    const fits = fitSq > 0
+    const framePlaneDist = fits ? Math.sqrt(fitSq) : 0
+    // Extruded-entry closure: wall depth from the buck plane to the sphere.
+    const wallDepth = (z: number) =>
+      Math.sqrt(Math.max(0, radius * radius - z * z - halfW * halfW)) - framePlaneDist
+    const topDepth = (t: number) =>
+      Math.sqrt(Math.max(0, radius * radius - zTop * zTop - t * t)) - framePlaneDist
     perDoor.set(spec.id, {
       ...spec,
       jambLength: spec.height,
       headerLength: spec.width,
       framePlaneDist,
       tunnelDepth: Math.max(0, rBase - framePlaneDist),
-      fits: fitSq > 0,
+      fits,
       removedStrutCount: 0,
       trimmedStrutCount: 0,
       removedHubCount: 0,
       removedPanelCount: 0,
       area: spec.width * spec.height,
+      closureSideArea: fits ? 2 * integrate(wallDepth, z0, zTop) : 0,
+      closureTopArea: fits ? integrate(topDepth, -halfW, halfW) : 0,
     })
   }
 

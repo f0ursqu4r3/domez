@@ -92,7 +92,9 @@ export function openingsCsv(
         (2 * d.height + d.width).toFixed(2),
         `2× jamb ${d.jambLength.toFixed(1)}, 1× header ${d.headerLength.toFixed(1)}`,
         `${d.removedStrutCount} removed, ${d.trimmedStrutCount} trimmed, ${d.removedHubCount} hubs out`,
-        d.fits ? `buck plane inset ${d.tunnelDepth.toFixed(1)} ${unit}` : 'DOES NOT FIT SHELL',
+        d.fits
+          ? `buck inset ${d.tunnelDepth.toFixed(1)} ${unit}; closure sides ${areaOf(d.closureSideArea).toFixed(2)} + top ${areaOf(d.closureTopArea).toFixed(2)} ${areaUnit}`
+          : 'DOES NOT FIT SHELL',
       ),
     )
   }

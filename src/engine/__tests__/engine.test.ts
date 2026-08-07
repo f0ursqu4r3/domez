@@ -287,6 +287,13 @@ describe('parametric doorways', () => {
     expect(info.headerLength).toBe(36)
     expect(info.framePlaneDist).toBeGreaterThan(0)
     expect(info.framePlaneDist).toBeLessThan(R)
+    // Extruded-entry closure: positive, bounded by simple rectangles.
+    const rBase = Math.sqrt(R * R - (dome.cutZ * R) ** 2)
+    const maxDepth = rBase - info.framePlaneDist + 1
+    expect(info.closureSideArea).toBeGreaterThan(0)
+    expect(info.closureSideArea).toBeLessThan(2 * 80 * maxDepth)
+    expect(info.closureTopArea).toBeGreaterThan(0)
+    expect(info.closureTopArea).toBeLessThan(36 * maxDepth)
     const tooTall = cutDoorways(dome, [{ id: 'D1', azimuthDeg: 0, width: 36, height: 200 }], R, {
       minStubLength: 6,
     })

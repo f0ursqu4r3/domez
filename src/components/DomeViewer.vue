@@ -48,6 +48,7 @@ function rebuildDome() {
     openings: state.openings,
     highlightFaces,
     doorway: doorway.value,
+    closeDoorways: state.closeDoorways,
   })
   scene.add(domeGroup)
 }
@@ -197,6 +198,7 @@ watch(
     state.openings,
     state.highlightOpening,
     doorway.value,
+    state.closeDoorways,
   ],
   () => rebuildDome(),
   { deep: true },

@@ -156,6 +156,8 @@ interface ProjectState {
   /** Parametric doorways: position + physical size, canonical mm. Doors
    * survive frequency/diameter changes — only their fit is revalidated. */
   doors: { azimuthDeg: number; widthMm: number; heightMm: number }[]
+  /** Render the extruded-entry closure sealing the shell back to each buck. */
+  closeDoorways: boolean
   /** Active viewer tool. 'door' places a doorway at the clicked azimuth;
    * window/vent paint panels; 'off' restores strut/hub picking. */
   openingTool: 'off' | OpeningType | 'erase'
@@ -187,6 +189,7 @@ const state = reactive<ProjectState>({
   trueSize: false,
   openings: {},
   doors: [],
+  closeDoorways: true,
   openingTool: 'off',
   highlightOpening: null,
   selection: null,
@@ -533,6 +536,7 @@ const exporters = {
       strutSection: state.trueSize ? strutSectionWorking.value : undefined,
       openings: state.openings,
       doorway: doorway.value,
+      closeDoorways: state.closeDoorways,
     })
     const exporter = new GLTFExporter()
     const result = await exporter.parseAsync(group, { binary: true })

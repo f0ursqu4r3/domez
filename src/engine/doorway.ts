@@ -46,6 +46,20 @@ export interface DoorFrameInfo extends DoorSpec {
    * to the sphere surface. Working units². Zero when the door doesn't fit. */
   closureSideArea: number
   closureTopArea: number
+  /** Stick framing for the closure, cut-list ready. `at` locates the piece:
+   * studs/plates by radial distance from the axis (side walls), top blocking
+   * by tangential offset from the door centerline. */
+  closureFraming: ClosureMember[]
+}
+
+export interface ClosureMember {
+  part: 'wall plate' | 'wall stud' | 'top blocking'
+  /** Cut length, working units. */
+  length: number
+  quantity: number
+  /** Position: radial distance (plate start / stud center) or tangential
+   * offset (top blocking), working units. */
+  at: number
 }
 
 export interface DoorwayCut {
@@ -61,6 +75,9 @@ export interface DoorwayCut {
 export interface DoorwayOptions {
   /** Trimmed pieces shorter than this are scrap and count as removed. */
   minStubLength: number
+  /** Closure framing stud spacing (16″ / 400 mm o.c.). 0 or omitted skips
+   * closure framing entirely (e.g. when the closure is toggled off). */
+  studSpacing?: number
 }
 
 export function emptyDoorwayCut(): DoorwayCut {
@@ -211,6 +228,31 @@ export function cutDoorways(
       Math.sqrt(Math.max(0, radius * radius - z * z - halfW * halfW)) - framePlaneDist
     const topDepth = (t: number) =>
       Math.sqrt(Math.max(0, radius * radius - zTop * zTop - t * t)) - framePlaneDist
+
+    // Closure stick framing. Side walls live in the plane t = ±w/2 where the
+    // shell traces the circle u² + z² = R'², R' = sqrt(R² − (w/2)²).
+    const closureFraming: ClosureMember[] = []
+    const spacing = opts.studSpacing ?? 0
+    if (fits && spacing > 0) {
+      const rPrimeSq = radius * radius - halfW * halfW
+      const uMax = Math.sqrt(Math.max(0, rPrimeSq - z0 * z0))
+      const plateLen = uMax - framePlaneDist
+      if (plateLen >= opts.minStubLength) {
+        closureFraming.push({ part: 'wall plate', length: plateLen, quantity: 2, at: framePlaneDist })
+      }
+      for (let u = framePlaneDist + spacing; u < uMax; u += spacing) {
+        const studLen = Math.sqrt(Math.max(0, rPrimeSq - u * u)) - z0
+        if (studLen < opts.minStubLength) break
+        closureFraming.push({ part: 'wall stud', length: studLen, quantity: 2, at: u })
+      }
+      for (let t = -halfW + spacing; t < halfW - 1e-9; t += spacing) {
+        const len = topDepth(t)
+        if (len >= opts.minStubLength) {
+          closureFraming.push({ part: 'top blocking', length: len, quantity: 1, at: t })
+        }
+      }
+    }
+
     perDoor.set(spec.id, {
       ...spec,
       jambLength: spec.height,
@@ -225,6 +267,7 @@ export function cutDoorways(
       area: spec.width * spec.height,
       closureSideArea: fits ? 2 * integrate(wallDepth, z0, zTop) : 0,
       closureTopArea: fits ? integrate(topDepth, -halfW, halfW) : 0,
+      closureFraming,
     })
   }
 

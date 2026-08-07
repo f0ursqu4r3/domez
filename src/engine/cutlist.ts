@@ -180,6 +180,39 @@ export function buildCutList(
           note: `${door.id} rough-opening span; add framing allowance for your style`,
         },
       )
+
+      // Closure framing: group identical part+length pieces into one row.
+      const framingGroups = new Map<string, { part: string; exact: number; rounded: number; qty: number }>()
+      for (const m of door.closureFraming) {
+        const rounded = roundToIncrement(m.length, opts.increment)
+        const key = `${m.part}:${rounded.toFixed(6)}`
+        const g = framingGroups.get(key) ?? { part: m.part, exact: m.length, rounded, qty: 0 }
+        g.qty += m.quantity
+        framingGroups.set(key, g)
+      }
+      const framingNote: Record<string, string> = {
+        'wall plate': `${door.id} closure wall bottom plate, square cuts`,
+        'wall stud': `${door.id} closure wall stud; top lands on the shell edge`,
+        'top blocking': `${door.id} closure top blocking, header to shell`,
+      }
+      for (const g of [...framingGroups.values()].sort(
+        (a, b) => a.part.localeCompare(b.part) || b.rounded - a.rounded,
+      )) {
+        rows.push({
+          typeId: -1,
+          label: `${door.id} ${g.part}`,
+          quantity: g.qty,
+          chordLength: g.exact,
+          exactCutLength: g.exact,
+          roundedCutLength: g.rounded,
+          roundingError: Math.abs(g.rounded - g.exact),
+          axialAngleDeg: 90,
+          dihedralMinDeg: NaN,
+          dihedralMaxDeg: NaN,
+          kind: 'frame',
+          note: framingNote[g.part],
+        })
+      }
     }
   }
 

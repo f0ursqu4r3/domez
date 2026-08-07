@@ -271,6 +271,36 @@ export function buildDomeGroup(
         )
         closure.name = `door-closure-${door.id}`
         group.add(closure)
+
+        // Closure stick framing: plates, studs, top blocking.
+        for (const member of door.closureFraming) {
+          if (member.part === 'wall plate') {
+            for (const side of [-1, 1]) {
+              addMember(
+                u.clone().multiplyScalar(member.at + member.length / 2)
+                  .addScaledVector(tv, side * half)
+                  .setY(z0 + memberW / 2),
+                memberW, memberW, member.length,
+              )
+            }
+          } else if (member.part === 'wall stud') {
+            for (const side of [-1, 1]) {
+              addMember(
+                u.clone().multiplyScalar(member.at)
+                  .addScaledVector(tv, side * half)
+                  .setY(z0 + member.length / 2),
+                memberW, member.length, memberD,
+              )
+            }
+          } else {
+            addMember(
+              u.clone().multiplyScalar(door.framePlaneDist + member.length / 2)
+                .addScaledVector(tv, member.at)
+                .setY(zTop - memberW / 2),
+              memberW, memberW, member.length,
+            )
+          }
+        }
       }
     }
   }

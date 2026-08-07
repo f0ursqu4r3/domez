@@ -310,6 +310,46 @@ describe('parametric doorways', () => {
     }
   })
 
+  it('generates closure framing: plates, studs stepping down the shell arc', () => {
+    const framed = cutDoorways(dome, [door], R, { minStubLength: 6, studSpacing: 16 })
+    const framing = framed.doors[0].closureFraming
+    const plates = framing.filter((m) => m.part === 'wall plate')
+    expect(plates).toHaveLength(1)
+    expect(plates[0].quantity).toBe(2)
+    // Plate runs at the wall plane t = ±w/2, where the shell is closer than
+    // at the door centerline (tunnelDepth).
+    const z0 = dome.cutZ * R
+    const wallPlaneDepth =
+      Math.sqrt(R * R - 18 * 18 - z0 * z0) - framed.doors[0].framePlaneDist
+    expect(plates[0].length).toBeCloseTo(wallPlaneDepth, 6)
+    expect(plates[0].length).toBeLessThan(framed.doors[0].tunnelDepth)
+    // The 36" door's wall is shallower than one 16" bay: no studs, correctly.
+    expect(framing.filter((m) => m.part === 'wall stud')).toHaveLength(0)
+
+    // A wider, taller door has deeper closure walls that DO take studs.
+    const big = cutDoorways(
+      dome,
+      [{ id: 'D1', azimuthDeg: 0, width: 48, height: 90 }],
+      R,
+      { minStubLength: 6, studSpacing: 16 },
+    )
+    const studs = big.doors[0].closureFraming.filter((m) => m.part === 'wall stud')
+    expect(studs.length).toBeGreaterThan(0)
+    // Studs shorten as they march out along the circular shell edge.
+    for (let i = 1; i < studs.length; i++) {
+      expect(studs[i].length).toBeLessThan(studs[i - 1].length)
+      expect(studs[i].at - studs[i - 1].at).toBeCloseTo(16, 9)
+    }
+    for (const m of big.doors[0].closureFraming) expect(m.length).toBeGreaterThanOrEqual(6)
+
+    // Framing lands in the cut list as frame rows; spacing 0 removes it.
+    const cl = buildCutList(dome, { radius: R, increment: 1 / 8, endOffset: 1.5, units: 'imperial' }, big)
+    expect(cl.rows.some((r) => r.label === 'D1 wall plate')).toBe(true)
+    expect(cl.rows.some((r) => r.label === 'D1 wall stud')).toBe(true)
+    const bare = buildCutList(dome, { radius: R, increment: 1 / 8, endOffset: 1.5, units: 'imperial' }, cut)
+    expect(bare.rows.some((r) => r.label.includes('wall'))).toBe(false)
+  })
+
   it('adjusts the cut list: reduced type counts, trimmed rows, buck members', () => {
     const base = buildCutList(dome, { radius: R, increment: 1 / 8, endOffset: 1.5, units: 'imperial' })
     const cutList = buildCutList(

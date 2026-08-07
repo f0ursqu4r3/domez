@@ -353,12 +353,18 @@ const doorSpecs = computed<DoorSpec[]>(() => {
 
 /** Trimmed-piece scrap floor: 6″ / 150 mm. */
 const minStubLength = computed(() => (state.units === 'imperial' ? 6 : 150))
+/** Closure framing stud spacing: 16″ / 400 mm o.c. Zero when the closure
+ * is toggled off, which also drops the framing from the cut list. */
+const studSpacing = computed(() =>
+  state.closeDoorways ? (state.units === 'imperial' ? 16 : 400) : 0,
+)
 
 const doorway = computed(() =>
   state.doors.length === 0
     ? emptyDoorwayCut()
     : cutDoorways(model.value, doorSpecs.value, radius.value, {
         minStubLength: minStubLength.value,
+        studSpacing: studSpacing.value,
       }),
 )
 
@@ -444,6 +450,7 @@ function runOptimizer() {
       units: state.units,
       doors: doorSpecs.value,
       minStubLength: minStubLength.value,
+      studSpacing: studSpacing.value,
     })
   } finally {
     state.optimizer.running = false

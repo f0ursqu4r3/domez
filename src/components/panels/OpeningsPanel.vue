@@ -186,6 +186,10 @@ function toggleHighlight(label: string) {
             <dd class="text-right font-mono">
               sides {{ areaText(door.closureSideArea) }} · top {{ areaText(door.closureTopArea) }}
             </dd>
+            <dt class="text-muted-foreground">Closure framing</dt>
+            <dd class="text-right font-mono">
+              {{ door.closureFraming.reduce((n, m) => n + m.quantity, 0) }} pcs — in cut list
+            </dd>
           </template>
         </dl>
 

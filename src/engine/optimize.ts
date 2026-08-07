@@ -22,6 +22,8 @@ export interface OptimizeOptions {
   doors?: DoorSpec[]
   /** Scrap threshold for trimmed door struts, working units. */
   minStubLength?: number
+  /** Closure framing stud spacing, forwarded to the doorway cut. */
+  studSpacing?: number
 }
 
 export interface OptimizeCandidate {
@@ -58,7 +60,10 @@ export function optimizeDiameter(model: DomeModel, opts: OptimizeOptions): Optim
     const diameter = opts.minDiameter + i * opts.step
     const doorway =
       opts.doors && opts.doors.length > 0
-        ? cutDoorways(model, opts.doors, diameter / 2, { minStubLength: opts.minStubLength ?? 0 })
+        ? cutDoorways(model, opts.doors, diameter / 2, {
+            minStubLength: opts.minStubLength ?? 0,
+            studSpacing: opts.studSpacing,
+          })
         : undefined
     const cutList = buildCutList(
       model,

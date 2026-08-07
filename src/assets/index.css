@@ -125,3 +125,51 @@
     @apply font-sans;
     }
 }
+/* ---- DOMEZ instrument theme ------------------------------------------- */
+
+@theme inline {
+    --font-sans: 'IBM Plex Sans', system-ui, sans-serif;
+    --font-mono: 'IBM Plex Mono', ui-monospace, monospace;
+    --font-display: 'Chakra Petch', var(--font-sans);
+}
+
+.dark {
+    --background: oklch(0.16 0.02 250);
+    --foreground: oklch(0.9 0.015 240);
+    --card: oklch(0.2 0.022 250);
+    --card-foreground: oklch(0.9 0.015 240);
+    --popover: oklch(0.21 0.022 250);
+    --popover-foreground: oklch(0.9 0.015 240);
+    --primary: oklch(0.8 0.16 75);
+    --primary-foreground: oklch(0.2 0.05 75);
+    --secondary: oklch(0.27 0.025 250);
+    --secondary-foreground: oklch(0.88 0.015 240);
+    --muted: oklch(0.25 0.022 250);
+    --muted-foreground: oklch(0.62 0.02 245);
+    --accent: oklch(0.28 0.03 250);
+    --accent-foreground: oklch(0.92 0.015 240);
+    --destructive: oklch(0.66 0.2 25);
+    --border: oklch(0.9 0.02 245 / 12%);
+    --input: oklch(0.9 0.02 245 / 16%);
+    --ring: oklch(0.8 0.16 75 / 60%);
+    --radius: 0.45rem;
+}
+
+.font-display {
+    font-family: var(--font-display);
+}
+
+.section-title {
+    font-family: var(--font-display);
+    font-size: 0.7rem;
+    font-weight: 600;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--muted-foreground);
+    margin-bottom: 0.75rem;
+}
+
+/* thin instrument scrollbars */
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-thumb { background: oklch(0.35 0.02 250); border-radius: 4px; }
+::-webkit-scrollbar-track { background: transparent; }

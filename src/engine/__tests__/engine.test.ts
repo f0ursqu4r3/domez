@@ -6,6 +6,7 @@ import { buildCutList } from '../cutlist'
 import { packCuts } from '../packing'
 import { optimizeDiameter } from '../optimize'
 import { analyzeOpenings } from '../openings'
+import { cutDoorways } from '../doorway'
 import { formatFeetInches, formatInchesFractional, roundToIncrement } from '../units'
 import { cross, dot, sub, add, length } from '../vec'
 
@@ -253,6 +254,93 @@ describe('openings', () => {
     const one = analyzeOpenings(dome, { 0: 'window' }, 1)[0]
     const hundred = analyzeOpenings(dome, { 0: 'window' }, 10)[0]
     expect(hundred.area / one.area).toBeCloseTo(100, 9)
+  })
+})
+
+describe('parametric doorways', () => {
+  const dome = generateDome({ frequency: 5, fraction: '5/8' })
+  const R = 156 // 26 ft dome, inches
+  const door = { id: 'D1', azimuthDeg: 0, width: 36, height: 80 }
+  const cut = cutDoorways(dome, [door], R, { minStubLength: 6 })
+
+  it('carves a localized opening: some struts removed, some trimmed', () => {
+    expect(cut.removedEdges.size + cut.trimmedEdges.size).toBeGreaterThan(0)
+    expect(cut.trimmed.length).toBeGreaterThan(0)
+    // Localized: a 36x80 door touches a small part of a 425-strut dome.
+    expect(cut.removedEdges.size + cut.trimmedEdges.size).toBeLessThan(40)
+    expect(cut.removedFaces.size).toBeGreaterThan(0)
+    expect(cut.removedFaces.size).toBeLessThan(40)
+  })
+
+  it('trimmed pieces are shorter than their parent strut and above the scrap floor', () => {
+    for (const piece of cut.trimmed) {
+      const full = dome.edges[piece.edgeId].chordFactor * R
+      expect(piece.length).toBeLessThan(full)
+      expect(piece.length).toBeGreaterThanOrEqual(6)
+    }
+  })
+
+  it('reports a buildable frame for a normal door and rejects an oversized one', () => {
+    const info = cut.doors[0]
+    expect(info.fits).toBe(true)
+    expect(info.jambLength).toBe(80)
+    expect(info.headerLength).toBe(36)
+    expect(info.framePlaneDist).toBeGreaterThan(0)
+    expect(info.framePlaneDist).toBeLessThan(R)
+    const tooTall = cutDoorways(dome, [{ id: 'D1', azimuthDeg: 0, width: 36, height: 200 }], R, {
+      minStubLength: 6,
+    })
+    expect(tooTall.doors[0].fits).toBe(false)
+  })
+
+  it('does not touch the far side of the dome', () => {
+    for (const eid of [...cut.removedEdges, ...cut.trimmedEdges]) {
+      const e = dome.edges[eid]
+      // Both endpoints have x > 0 (door is at azimuth 0 = +x).
+      expect(
+        dome.vertices[e.v0].position[0] > 0 || dome.vertices[e.v1].position[0] > 0,
+      ).toBe(true)
+    }
+  })
+
+  it('adjusts the cut list: reduced type counts, trimmed rows, buck members', () => {
+    const base = buildCutList(dome, { radius: R, increment: 1 / 8, endOffset: 1.5, units: 'imperial' })
+    const cutList = buildCutList(
+      dome,
+      { radius: R, increment: 1 / 8, endOffset: 1.5, units: 'imperial' },
+      cut,
+    )
+    // Type rows stay first and aligned with strutTypes for row indexing.
+    for (let i = 0; i < dome.strutTypes.length; i++) {
+      expect(cutList.rows[i].typeId).toBe(i)
+      expect(cutList.rows[i].kind).toBe('strut')
+    }
+    // Per type: base count = kept + removed + trimmed parents.
+    const goneByType = new Map<number, number>()
+    for (const eid of [...cut.removedEdges, ...cut.trimmedEdges]) {
+      const t = dome.edges[eid].typeId
+      goneByType.set(t, (goneByType.get(t) ?? 0) + 1)
+    }
+    for (let i = 0; i < dome.strutTypes.length; i++) {
+      expect(cutList.rows[i].quantity).toBe(base.rows[i].quantity - (goneByType.get(i) ?? 0))
+    }
+    const trimmedRows = cutList.rows.filter((r) => r.kind === 'trimmed')
+    expect(trimmedRows.reduce((n, r) => n + r.quantity, 0)).toBe(cut.trimmed.length)
+    const frameRows = cutList.rows.filter((r) => r.kind === 'frame')
+    expect(frameRows).toHaveLength(2)
+    expect(frameRows.find((r) => r.label === 'D1 jamb')!.quantity).toBe(2)
+    expect(frameRows.find((r) => r.label === 'D1 header')!.roundedCutLength).toBe(36)
+  })
+
+  it('no doors → cut list is unchanged', () => {
+    const base = buildCutList(dome, { radius: R, increment: 1 / 8, endOffset: 1.5, units: 'imperial' })
+    const withEmpty = buildCutList(
+      dome,
+      { radius: R, increment: 1 / 8, endOffset: 1.5, units: 'imperial' },
+      cutDoorways(dome, [], R, { minStubLength: 6 }),
+    )
+    expect(withEmpty.rows).toEqual(base.rows)
+    expect(withEmpty.totalStruts).toBe(base.totalStruts)
   })
 })
 

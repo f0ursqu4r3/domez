@@ -5,7 +5,8 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { useDomeProject } from '@/composables/useDomeProject'
 import { buildDomeGroup, type DomePickMaps } from '@/lib/three-builders'
 
-const { state, model, radius, strutSectionWorking, openingGroups, paintFace } = useDomeProject()
+const { state, model, radius, strutSectionWorking, openingGroups, paintFace, addDoorAt, doorway } =
+  useDomeProject()
 
 const container = ref<HTMLDivElement | null>(null)
 let renderer: THREE.WebGLRenderer | null = null
@@ -46,6 +47,7 @@ function rebuildDome() {
     strutSection: state.trueSize ? strutSectionWorking.value : undefined,
     openings: state.openings,
     highlightFaces,
+    doorway: doorway.value,
   })
   scene.add(domeGroup)
 }
@@ -90,7 +92,19 @@ function onPointerUp(ev: PointerEvent) {
   raycaster.setFromCamera(pointer, camera)
   const pick = domeGroup.userData.pick as DomePickMaps
 
-  // Opening tool active: clicks paint panels instead of selecting parts.
+  // Door tool: place a parametric doorway at the clicked azimuth.
+  if (state.openingTool === 'door') {
+    const targets: THREE.Object3D[] = [...pick.panelMaps.keys(), ...pick.strutMaps.keys()]
+    const hit = raycaster.intersectObjects(targets, false)[0]
+    if (hit) {
+      // three (x, z, -y) -> engine azimuth atan2(y, x) = atan2(-z, x).
+      const azimuthDeg = (Math.atan2(-hit.point.z, hit.point.x) * 180) / Math.PI
+      addDoorAt(azimuthDeg)
+    }
+    return
+  }
+
+  // Paint tools: clicks assign panels instead of selecting parts.
   if (state.openingTool !== 'off') {
     const panelHits = raycaster.intersectObjects([...pick.panelMaps.keys()], false)
     const panelHit = panelHits[0]
@@ -182,6 +196,7 @@ watch(
     strutSectionWorking.value,
     state.openings,
     state.highlightOpening,
+    doorway.value,
   ],
   () => rebuildDome(),
   { deep: true },

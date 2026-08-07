@@ -27,6 +27,11 @@ bun run build    # production build
 - **Fabrication outputs** — cut list with exact vs rounded lengths and error, axial (hub)
   angles and panel dihedrals, hub schedule, board-by-board cutting diagrams with kerf and
   waste, bottom-up assembly plan with per-course strut tallies, printable hub labels.
+- **Openings** — parametric doorways (click to place, set width × height × bearing): the
+  passage is cut from the frame, interrupted struts are trimmed back to the door buck
+  († rows in the cut list), and the buck members (2 jambs + header) join the cut list and
+  stock packing. Windows/vents are painted per panel with glazing areas and frame-out
+  strut summaries.
 - **Diameter optimizer** — scans a range and scores candidates on clean cut rounding +
   minimal stock waste (first-fit-decreasing packing into your stock lengths).
 - **Exports** — CSV (cut list / boards / hubs), SVG (fabrication drawings, hub labels),

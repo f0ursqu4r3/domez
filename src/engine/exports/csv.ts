@@ -1,4 +1,5 @@
 import type { CutList } from '../cutlist'
+import type { DoorFrameInfo } from '../doorway'
 import type { PackingResult } from '../packing'
 import type { OpeningGroup } from '../openings'
 import type { DomeModel, UnitSystem } from '../types'
@@ -23,6 +24,8 @@ export function cutListCsv(cutList: CutList, units: UnitSystem): string {
       `Chord (${unit})`,
       'Axial angle (deg)',
       'Dihedral (deg)',
+      'Kind',
+      'Notes',
     ),
   ]
   for (const r of cutList.rows) {
@@ -39,6 +42,8 @@ export function cutListCsv(cutList: CutList, units: UnitSystem): string {
         Number.isNaN(r.dihedralMinDeg)
           ? ''
           : `${r.dihedralMinDeg.toFixed(2)}–${r.dihedralMaxDeg.toFixed(2)}`,
+        r.kind,
+        r.note ?? '',
       ),
     )
   }
@@ -57,7 +62,11 @@ export function hubsCsv(model: DomeModel): string {
   return lines.join('\n')
 }
 
-export function openingsCsv(groups: OpeningGroup[], units: UnitSystem): string {
+export function openingsCsv(
+  groups: OpeningGroup[],
+  doors: DoorFrameInfo[],
+  units: UnitSystem,
+): string {
   const unit = units === 'imperial' ? 'in' : 'mm'
   const areaUnit = units === 'imperial' ? 'ft2' : 'm2'
   const areaOf = (a: number) => (units === 'imperial' ? a / 144 : a / 1e6)
@@ -65,25 +74,39 @@ export function openingsCsv(groups: OpeningGroup[], units: UnitSystem): string {
     row(
       'Opening',
       'Type',
-      'Panels',
+      'Detail',
       `Area (${areaUnit})`,
       `Perimeter (${unit})`,
-      'Frame-out struts',
-      'Perimeter struts',
-      'Reaches base',
+      'Frame / frame-out',
+      'Struts affected',
+      'Notes',
     ),
   ]
+  for (const d of doors) {
+    lines.push(
+      row(
+        d.id,
+        'doorway',
+        `${d.width.toFixed(1)} × ${d.height.toFixed(1)} ${unit} @ ${d.azimuthDeg}°`,
+        areaOf(d.area).toFixed(2),
+        (2 * d.height + d.width).toFixed(2),
+        `2× jamb ${d.jambLength.toFixed(1)}, 1× header ${d.headerLength.toFixed(1)}`,
+        `${d.removedStrutCount} removed, ${d.trimmedStrutCount} trimmed, ${d.removedHubCount} hubs out`,
+        d.fits ? `buck plane inset ${d.tunnelDepth.toFixed(1)} ${unit}` : 'DOES NOT FIT SHELL',
+      ),
+    )
+  }
   for (const g of groups) {
     lines.push(
       row(
         g.label,
         g.type,
-        g.faceIds.length,
+        `${g.faceIds.length} panels`,
         areaOf(g.area).toFixed(2),
         g.perimeter.toFixed(2),
         g.interiorSummary || '—',
         g.perimeterSummary,
-        g.reachesBase ? 'yes' : 'no',
+        g.reachesBase ? 'reaches base' : '',
       ),
     )
   }

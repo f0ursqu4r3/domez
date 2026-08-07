@@ -10,6 +10,7 @@ import {
   type OpeningGroup,
   type OpeningType,
 } from '@/engine/openings'
+import { cutDoorways, emptyDoorwayCut, type DoorSpec } from '@/engine/doorway'
 import { diameterToWorking, IMPERIAL_INCREMENTS, METRIC_INCREMENTS } from '@/engine/units'
 import type { Fraction, Frequency, UnitSystem } from '@/engine/types'
 import { cutListCsv, hubsCsv, boardsCsv, openingsCsv } from '@/engine/exports/csv'
@@ -144,9 +145,13 @@ interface ProjectState {
   explode: number
   /** Render struts at their real cross-section instead of schematic sticks. */
   trueSize: boolean
-  /** Panel opening assignments: faceId -> window | door | vent. */
+  /** Panel opening assignments: faceId -> window | vent (doors are parametric). */
   openings: OpeningAssignments
-  /** Active paint tool for viewer panel clicks; 'off' restores strut/hub picking. */
+  /** Parametric doorways: position + physical size, canonical mm. Doors
+   * survive frequency/diameter changes — only their fit is revalidated. */
+  doors: { azimuthDeg: number; widthMm: number; heightMm: number }[]
+  /** Active viewer tool. 'door' places a doorway at the clicked azimuth;
+   * window/vent paint panels; 'off' restores strut/hub picking. */
   openingTool: 'off' | OpeningType | 'erase'
   /** Opening group label to highlight in the viewer (from the Openings panel). */
   highlightOpening: string | null
@@ -175,6 +180,7 @@ const state = reactive<ProjectState>({
   explode: 0.35,
   trueSize: false,
   openings: {},
+  doors: [],
   openingTool: 'off',
   highlightOpening: null,
   selection: null,
@@ -302,32 +308,75 @@ const activeStock = computed(() =>
 )
 
 const cutList = computed(() =>
-  buildCutList(model.value, {
-    radius: radius.value,
-    increment: state.increment,
-    endOffset: workingEndOffset.value,
-    units: state.units,
-  }),
+  buildCutList(
+    model.value,
+    {
+      radius: radius.value,
+      increment: state.increment,
+      endOffset: workingEndOffset.value,
+      units: state.units,
+    },
+    doorway.value,
+  ),
 )
 
 const packing = computed(() =>
   packCuts(cutList.value, { kerf: workingKerf.value, stock: activeStock.value }),
 )
-const assemblyPlan = computed(() => buildAssemblyPlan(model.value))
+const assemblyPlan = computed(() =>
+  buildAssemblyPlan(model.value, new Set([...doorway.value.removedEdges, ...doorway.value.trimmedEdges])),
+)
 
 const openingGroups = computed<OpeningGroup[]>(() =>
   analyzeOpenings(model.value, state.openings, radius.value),
 )
 
+/** Door specs in working units, labeled D1, D2, ... in list order. */
+const doorSpecs = computed<DoorSpec[]>(() => {
+  const c = (mm: number) => (state.units === 'imperial' ? mm / MM_PER_INCH : mm)
+  return state.doors.map((d, i) => ({
+    id: `D${i + 1}`,
+    azimuthDeg: d.azimuthDeg,
+    width: c(d.widthMm),
+    height: c(d.heightMm),
+  }))
+})
+
+/** Trimmed-piece scrap floor: 6″ / 150 mm. */
+const minStubLength = computed(() => (state.units === 'imperial' ? 6 : 150))
+
+const doorway = computed(() =>
+  state.doors.length === 0
+    ? emptyDoorwayCut()
+    : cutDoorways(model.value, doorSpecs.value, radius.value, {
+        minStubLength: minStubLength.value,
+      }),
+)
+
 /** Paint/erase a panel with the active opening tool (viewer click handler). */
 function paintFace(faceId: number) {
-  if (state.openingTool === 'off') return
+  if (state.openingTool === 'off' || state.openingTool === 'door') return
   if (state.openingTool === 'erase') {
     delete state.openings[faceId]
   } else {
     state.openings[faceId] = state.openingTool
   }
   state.highlightOpening = null
+}
+
+/** Place a parametric doorway at an azimuth (viewer door-tool click).
+ * Default rough opening: 36″ × 80″. One placement per tool activation. */
+function addDoorAt(azimuthDeg: number) {
+  state.doors.push({
+    azimuthDeg: Math.round(((azimuthDeg % 360) + 360) % 360),
+    widthMm: 36 * MM_PER_INCH,
+    heightMm: 80 * MM_PER_INCH,
+  })
+  state.openingTool = 'off'
+}
+
+function removeDoor(index: number) {
+  state.doors.splice(index, 1)
 }
 
 function removeOpeningGroup(group: OpeningGroup) {
@@ -370,6 +419,8 @@ function runOptimizer() {
       kerf: workingKerf.value,
       stock: activeStock.value,
       units: state.units,
+      doors: doorSpecs.value,
+      minStubLength: minStubLength.value,
     })
   } finally {
     state.optimizer.running = false
@@ -411,6 +462,7 @@ const projectSettings = computed(() => ({
   kerf: kerf.value,
   stock: activeStock.value,
   openings: { ...state.openings },
+  doors: state.doors.map((d) => ({ ...d })),
 }))
 
 const exporters = {
@@ -422,7 +474,7 @@ const exporters = {
   openingsCsv: () =>
     download(
       `${fileStem.value}-openings.csv`,
-      openingsCsv(openingGroups.value, state.units),
+      openingsCsv(openingGroups.value, doorway.value.doors, state.units),
       'text/csv',
     ),
   svg: () =>
@@ -460,6 +512,7 @@ const exporters = {
       explode: 0,
       strutSection: state.trueSize ? strutSectionWorking.value : undefined,
       openings: state.openings,
+      doorway: doorway.value,
     })
     const exporter = new GLTFExporter()
     const result = await exporter.parseAsync(group, { binary: true })
@@ -504,6 +557,16 @@ function loadProjectFile(text: string): boolean {
     }
   }
   state.openings = openings
+  state.doors = (settings.doors ?? [])
+    .filter(
+      (d) =>
+        typeof d?.azimuthDeg === 'number' &&
+        typeof d?.widthMm === 'number' &&
+        typeof d?.heightMm === 'number' &&
+        d.widthMm > 0 &&
+        d.heightMm > 0,
+    )
+    .map((d) => ({ azimuthDeg: d.azimuthDeg, widthMm: d.widthMm, heightMm: d.heightMm }))
   state.selection = null
   return true
 }
@@ -526,7 +589,11 @@ export function useDomeProject() {
     packing,
     assemblyPlan,
     openingGroups,
+    doorway,
+    doorSpecs,
     paintFace,
+    addDoorAt,
+    removeDoor,
     removeOpeningGroup,
     clearOpenings,
     increments,

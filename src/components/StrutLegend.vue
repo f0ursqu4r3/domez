@@ -16,7 +16,7 @@ function select(typeId: number) {
     class="pointer-events-auto flex flex-col gap-1 rounded-lg border border-border bg-card/90 p-2 backdrop-blur-sm shadow-lg"
   >
     <button
-      v-for="r in cutList.rows"
+      v-for="r in cutList.rows.filter((row) => row.kind === 'strut' && row.quantity > 0)"
       :key="r.typeId"
       class="flex items-center gap-2 rounded-sm px-1.5 py-0.5 text-left hover:bg-muted/60 transition-colors"
       @click="select(r.typeId)"

@@ -6,12 +6,20 @@ import { formatLength } from '@/engine/units'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Separator } from '@/components/ui/separator'
+import { Input } from '@/components/ui/input'
+import { Field, FieldLabel } from '@/components/ui/field'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '@/components/ui/empty'
 import { DoorOpen, AppWindow, Fan, Eraser, Trash2, TriangleAlert, X } from '@lucide/vue'
 
 const project = useDomeProject()
-const { state, openingGroups } = project
+const { state, openingGroups, doorway } = project
+
+const MM_PER_INCH = 25.4
+const smallUnit = computed(() => (state.units === 'imperial' ? 'in' : 'mm'))
+const toDisplay = (mm: number) =>
+  state.units === 'imperial' ? Math.round((mm / MM_PER_INCH) * 100) / 100 : Math.round(mm * 10) / 10
+const fromDisplay = (v: number) => (state.units === 'imperial' ? v * MM_PER_INCH : v)
 
 const TYPE_META: Record<OpeningType, { label: string; color: string; icon: unknown }> = {
   door: { label: 'Door', color: '#c9873a', icon: DoorOpen },
@@ -34,7 +42,7 @@ const totals = computed(() => {
     .filter((g) => g.type === 'window')
     .reduce((s, g) => s + g.area, 0)
   return {
-    doors: openingGroups.value.filter((g) => g.type === 'door').length,
+    doors: doorway.value.doors.length,
     windows: openingGroups.value.filter((g) => g.type === 'window').length,
     vents: openingGroups.value.filter((g) => g.type === 'vent').length,
     glazing,
@@ -66,31 +74,118 @@ function toggleHighlight(label: string) {
       <p class="mt-2 text-xs text-muted-foreground leading-relaxed">
         {{
           state.openingTool === 'off'
-            ? 'Pick a tool, then click dome panels in the viewer. Adjacent panels of the same type merge into one opening.'
-            : state.openingTool === 'erase'
-              ? 'Click panels in the viewer to clear them. Pick the tool again to stop.'
-              : `Click panels in the viewer to place ${state.openingTool} panels. Pick the tool again to stop.`
+            ? 'Door: click the dome where the doorway goes — it cuts the frame and gets real dimensions below. Window/vent: paint panels; adjacent panels merge.'
+            : state.openingTool === 'door'
+              ? 'Click the dome at the doorway position. The door is placed at that compass bearing.'
+              : state.openingTool === 'erase'
+                ? 'Click painted panels in the viewer to clear them. Pick the tool again to stop.'
+                : `Click panels in the viewer to place ${state.openingTool} panels. Pick the tool again to stop.`
         }}
       </p>
     </section>
 
     <Separator />
 
+    <!-- Parametric doorways -->
+    <section v-if="doorway.doors.length > 0" class="flex flex-col gap-2">
+      <h3 class="section-title mb-0">Doorways</h3>
+      <div
+        v-for="(door, i) in doorway.doors"
+        :key="door.id"
+        class="rounded-md border border-border bg-card p-3 flex flex-col gap-2.5"
+      >
+        <div class="flex items-center gap-2">
+          <span
+            class="inline-flex size-6 items-center justify-center rounded-sm"
+            style="background: #c9873a33; color: #c9873a"
+          >
+            <DoorOpen class="size-3.5" />
+          </span>
+          <span class="font-mono font-semibold text-sm">{{ door.id }}</span>
+          <span class="text-xs text-muted-foreground">
+            {{ formatLength(door.width, state.units) }} × {{ formatLength(door.height, state.units) }}
+          </span>
+          <Button
+            size="icon-sm"
+            variant="ghost"
+            class="ml-auto"
+            title="Remove doorway"
+            @click="project.removeDoor(i)"
+          >
+            <X />
+          </Button>
+        </div>
+
+        <div class="grid grid-cols-3 gap-2">
+          <Field>
+            <FieldLabel class="text-xs">Width ({{ smallUnit }})</FieldLabel>
+            <Input
+              type="number" min="1" step="1" class="font-mono h-8"
+              :model-value="toDisplay(state.doors[i].widthMm)"
+              @update:model-value="(v) => { const n = Number(v); if (n > 0) state.doors[i].widthMm = fromDisplay(n) }"
+            />
+          </Field>
+          <Field>
+            <FieldLabel class="text-xs">Height ({{ smallUnit }})</FieldLabel>
+            <Input
+              type="number" min="1" step="1" class="font-mono h-8"
+              :model-value="toDisplay(state.doors[i].heightMm)"
+              @update:model-value="(v) => { const n = Number(v); if (n > 0) state.doors[i].heightMm = fromDisplay(n) }"
+            />
+          </Field>
+          <Field>
+            <FieldLabel class="text-xs">Bearing (°)</FieldLabel>
+            <Input
+              type="number" min="0" max="359" step="1" class="font-mono h-8"
+              :model-value="state.doors[i].azimuthDeg"
+              @update:model-value="(v) => (state.doors[i].azimuthDeg = ((Number(v) % 360) + 360) % 360)"
+            />
+          </Field>
+        </div>
+
+        <dl class="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-xs">
+          <dt class="text-muted-foreground">Buck members</dt>
+          <dd class="text-right font-mono">
+            2× jamb {{ formatLength(door.jambLength, state.units) }} · 1× header {{ formatLength(door.headerLength, state.units) }}
+          </dd>
+          <dt class="text-muted-foreground">Struts</dt>
+          <dd class="text-right font-mono">
+            {{ door.removedStrutCount }} removed · {{ door.trimmedStrutCount }} trimmed to buck
+          </dd>
+          <dt class="text-muted-foreground">Hubs removed</dt>
+          <dd class="text-right font-mono">{{ door.removedHubCount }}</dd>
+          <dt class="text-muted-foreground">Buck plane inset</dt>
+          <dd class="text-right font-mono">{{ formatLength(door.tunnelDepth, state.units) }}</dd>
+        </dl>
+
+        <p v-if="!door.fits" class="flex items-center gap-1.5 text-xs text-destructive">
+          <TriangleAlert class="size-3.5 shrink-0" />
+          Doorway doesn't fit inside the shell — reduce width or height.
+        </p>
+        <p v-else class="text-xs text-muted-foreground leading-relaxed">
+          Trimmed struts († rows in the cut list) land square on the buck. Jambs anchor to the
+          foundation; the header carries the interrupted struts.
+        </p>
+      </div>
+    </section>
+
+    <Separator v-if="doorway.doors.length > 0" />
+
     <Empty
-      v-if="openingGroups.length === 0"
+      v-if="openingGroups.length === 0 && doorway.doors.length === 0"
       class="border border-dashed border-border rounded-lg py-10"
     >
       <EmptyHeader>
         <EmptyMedia variant="icon"><DoorOpen /></EmptyMedia>
         <EmptyTitle>No openings yet</EmptyTitle>
         <EmptyDescription>
-          Place a door at the base ring and windows where you want light — the schedule, glazing
-          areas, and frame-out struts appear here.
+          Place a doorway with real dimensions and paint windows where you want light — the
+          schedule, glazing areas, and framing changes appear here.
         </EmptyDescription>
       </EmptyHeader>
     </Empty>
 
-    <template v-else>
+    <template v-else-if="openingGroups.length > 0">
       <section class="flex flex-wrap gap-2">
         <Badge variant="secondary" class="font-mono"
           >{{ totals.doors }} door{{ totals.doors === 1 ? '' : 's' }}</Badge

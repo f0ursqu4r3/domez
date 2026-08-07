@@ -19,6 +19,8 @@ export const STRUT_COLORS = [
 ]
 
 export function strutColor(typeId: number): string {
+  // Negative ids are non-strut cut-list rows (door bucks) — frame amber.
+  if (typeId < 0) return '#c9873a'
   return STRUT_COLORS[typeId % STRUT_COLORS.length]
 }
 

@@ -1,0 +1,280 @@
+import type { DomeModel, Vec3 } from './types'
+
+/** A parametric doorway standing on the base plane. Working units. */
+export interface DoorSpec {
+  /** Label, e.g. D1. */
+  id: string
+  /** Position around the base ring, degrees (0 = +x). */
+  azimuthDeg: number
+  /** Rough opening width. */
+  width: number
+  /** Rough opening height above the base plane. */
+  height: number
+}
+
+/** A strut interrupted by a doorway: the surviving piece lands on the buck. */
+export interface TrimmedStrut {
+  edgeId: number
+  typeId: number
+  doorId: string
+  /** Piece length, working units. */
+  length: number
+  /** Piece endpoints on the unit sphere scale (world = unit × radius). */
+  aUnit: Vec3
+  bUnit: Vec3
+}
+
+export interface DoorFrameInfo extends DoorSpec {
+  /** Vertical buck members, one per side (cut length = height). */
+  jambLength: number
+  /** Horizontal header member (rough-opening span; add your framing allowances). */
+  headerLength: number
+  /** Distance of the vertical buck plane from the dome axis. */
+  framePlaneDist: number
+  /** How far the buck plane sits inside the base ring at the door center. */
+  tunnelDepth: number
+  /** False when the rectangle does not fit inside the shell (too tall/wide). */
+  fits: boolean
+  removedStrutCount: number
+  trimmedStrutCount: number
+  removedHubCount: number
+  removedPanelCount: number
+  /** Door slab area, width × height. */
+  area: number
+}
+
+export interface DoorwayCut {
+  doors: DoorFrameInfo[]
+  removedEdges: Set<number>
+  /** Edges replaced by shorter pieces (also absent from the normal count). */
+  trimmedEdges: Set<number>
+  trimmed: TrimmedStrut[]
+  removedFaces: Set<number>
+  removedVertices: Set<number>
+}
+
+export interface DoorwayOptions {
+  /** Trimmed pieces shorter than this are scrap and count as removed. */
+  minStubLength: number
+}
+
+export function emptyDoorwayCut(): DoorwayCut {
+  return {
+    doors: [],
+    removedEdges: new Set(),
+    trimmedEdges: new Set(),
+    trimmed: [],
+    removedFaces: new Set(),
+    removedVertices: new Set(),
+  }
+}
+
+interface DoorFrame {
+  spec: DoorSpec
+  /** Radial horizontal unit vector at the azimuth. */
+  ux: number
+  uy: number
+  /** Base plane height, working units (cutZ × radius). */
+  z0: number
+  halfWidth: number
+  height: number
+}
+
+/** Interval [s0, s1] of a segment inside the door passage, or null. The
+ * passage is the door rectangle extruded radially through the shell:
+ * |tangential| ≤ w/2, base ≤ z ≤ base + h, on the door's side of the axis. */
+function insideInterval(frame: DoorFrame, a: Vec3, b: Vec3): [number, number] | null {
+  let s0 = 0
+  let s1 = 1
+  const clip = (fa: number, fb: number, lo: number, hi: number): boolean => {
+    // f(s) = fa + s (fb - fa) must lie within [lo, hi]
+    const d = fb - fa
+    if (Math.abs(d) < 1e-12) {
+      return fa >= lo && fa <= hi
+    }
+    let t0 = (lo - fa) / d
+    let t1 = (hi - fa) / d
+    if (t0 > t1) [t0, t1] = [t1, t0]
+    s0 = Math.max(s0, t0)
+    s1 = Math.min(s1, t1)
+    return s1 > s0
+  }
+  const tA = -frame.uy * a[0] + frame.ux * a[1]
+  const tB = -frame.uy * b[0] + frame.ux * b[1]
+  if (!clip(tA, tB, -frame.halfWidth, frame.halfWidth)) return null
+  const zA = a[2] - frame.z0
+  const zB = b[2] - frame.z0
+  if (!clip(zA, zB, -1e9, frame.height)) return null
+  const uA = frame.ux * a[0] + frame.uy * a[1]
+  const uB = frame.ux * b[0] + frame.uy * b[1]
+  if (!clip(uA, uB, 0, 1e12)) return null
+  return s1 - s0 > 1e-9 ? [s0, s1] : null
+}
+
+function insidePoint(frame: DoorFrame, p: Vec3): boolean {
+  const t = -frame.uy * p[0] + frame.ux * p[1]
+  const z = p[2] - frame.z0
+  const u = frame.ux * p[0] + frame.uy * p[1]
+  return Math.abs(t) <= frame.halfWidth && z <= frame.height && u >= 0
+}
+
+const lerp3 = (a: Vec3, b: Vec3, s: number): Vec3 => [
+  a[0] + (b[0] - a[0]) * s,
+  a[1] + (b[1] - a[1]) * s,
+  a[2] + (b[2] - a[2]) * s,
+]
+
+/**
+ * Cut parametric doorways into the dome. Struts crossing a doorway are
+ * trimmed back to the passage boundary (the surviving piece runs from its
+ * hub to the buck); struts and panels fully inside are removed. The buck
+ * itself (2 jambs + header) is reported per door for the cut list.
+ */
+export function cutDoorways(
+  model: DomeModel,
+  doors: DoorSpec[],
+  radius: number,
+  opts: DoorwayOptions,
+): DoorwayCut {
+  const result = emptyDoorwayCut()
+  if (doors.length === 0) return result
+
+  const z0 = model.cutZ * radius
+  const frames: DoorFrame[] = doors.map((spec) => {
+    const az = (spec.azimuthDeg * Math.PI) / 180
+    return {
+      spec,
+      ux: Math.cos(az),
+      uy: Math.sin(az),
+      z0,
+      halfWidth: spec.width / 2,
+      height: spec.height,
+    }
+  })
+
+  const perDoor = new Map<string, DoorFrameInfo>()
+  const rBase = Math.sqrt(Math.max(0, radius * radius - z0 * z0))
+  for (const spec of doors) {
+    const zTop = z0 + spec.height
+    const fitSq = radius * radius - zTop * zTop - (spec.width / 2) ** 2
+    const framePlaneDist = fitSq > 0 ? Math.sqrt(fitSq) : 0
+    perDoor.set(spec.id, {
+      ...spec,
+      jambLength: spec.height,
+      headerLength: spec.width,
+      framePlaneDist,
+      tunnelDepth: Math.max(0, rBase - framePlaneDist),
+      fits: fitSq > 0,
+      removedStrutCount: 0,
+      trimmedStrutCount: 0,
+      removedHubCount: 0,
+      removedPanelCount: 0,
+      area: spec.width * spec.height,
+    })
+  }
+
+  // ---- Struts: clip each edge against every door passage ----
+  for (const e of model.edges) {
+    const a: Vec3 = [
+      model.vertices[e.v0].position[0] * radius,
+      model.vertices[e.v0].position[1] * radius,
+      model.vertices[e.v0].position[2] * radius,
+    ]
+    const b: Vec3 = [
+      model.vertices[e.v1].position[0] * radius,
+      model.vertices[e.v1].position[1] * radius,
+      model.vertices[e.v1].position[2] * radius,
+    ]
+    // Union of inside intervals across doors (doors rarely overlap).
+    const intervals: [number, number, string][] = []
+    for (const frame of frames) {
+      const hit = insideInterval(frame, a, b)
+      if (hit) intervals.push([hit[0], hit[1], frame.spec.id])
+    }
+    if (intervals.length === 0) continue
+    intervals.sort((x, y) => x[0] - y[0])
+    const merged: [number, number, string][] = []
+    for (const iv of intervals) {
+      const last = merged[merged.length - 1]
+      if (last && iv[0] <= last[1] + 1e-9) last[1] = Math.max(last[1], iv[1])
+      else merged.push([...iv] as [number, number, string])
+    }
+    const doorId = merged[0][2]
+    const info = perDoor.get(doorId)!
+
+    // Outside pieces = complement of merged intervals within [0, 1].
+    const pieces: [number, number][] = []
+    let cursor = 0
+    for (const [i0, i1] of merged) {
+      if (i0 > cursor + 1e-9) pieces.push([cursor, i0])
+      cursor = Math.max(cursor, i1)
+    }
+    if (cursor < 1 - 1e-9) pieces.push([cursor, 1])
+
+    const edgeLength = e.chordFactor * radius
+    const keptPieces = pieces.filter(([p0, p1]) => (p1 - p0) * edgeLength >= opts.minStubLength)
+    if (keptPieces.length === 0) {
+      result.removedEdges.add(e.id)
+      info.removedStrutCount++
+      continue
+    }
+    result.trimmedEdges.add(e.id)
+    info.trimmedStrutCount += keptPieces.length
+    for (const [p0, p1] of keptPieces) {
+      result.trimmed.push({
+        edgeId: e.id,
+        typeId: e.typeId,
+        doorId,
+        length: (p1 - p0) * edgeLength,
+        aUnit: lerp3(model.vertices[e.v0].position, model.vertices[e.v1].position, p0),
+        bUnit: lerp3(model.vertices[e.v0].position, model.vertices[e.v1].position, p1),
+      })
+    }
+  }
+
+  // ---- Vertices fully inside a passage ----
+  for (const v of model.vertices) {
+    const p: Vec3 = [v.position[0] * radius, v.position[1] * radius, v.position[2] * radius]
+    for (const frame of frames) {
+      if (insidePoint(frame, p)) {
+        result.removedVertices.add(v.id)
+        perDoor.get(frame.spec.id)!.removedHubCount++
+        break
+      }
+    }
+  }
+
+  // ---- Panels: any sampled point inside → the panel is part of the opening ----
+  for (const f of model.faces) {
+    const pts = f.vertexIds.map(
+      (vi): Vec3 => [
+        model.vertices[vi].position[0] * radius,
+        model.vertices[vi].position[1] * radius,
+        model.vertices[vi].position[2] * radius,
+      ],
+    )
+    const samples: Vec3[] = [
+      ...pts,
+      lerp3(pts[0], pts[1], 0.5),
+      lerp3(pts[1], pts[2], 0.5),
+      lerp3(pts[2], pts[0], 0.5),
+      [
+        (pts[0][0] + pts[1][0] + pts[2][0]) / 3,
+        (pts[0][1] + pts[1][1] + pts[2][1]) / 3,
+        (pts[0][2] + pts[1][2] + pts[2][2]) / 3,
+      ],
+    ]
+    outer: for (const frame of frames) {
+      for (const p of samples) {
+        if (insidePoint(frame, p)) {
+          result.removedFaces.add(f.id)
+          perDoor.get(frame.spec.id)!.removedPanelCount++
+          break outer
+        }
+      }
+    }
+  }
+
+  result.doors = doors.map((d) => perDoor.get(d.id)!)
+  return result
+}

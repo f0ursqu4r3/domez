@@ -106,9 +106,12 @@ const chips = computed(() => [
               class="rounded-md border border-primary/50 bg-primary/15 px-2.5 py-1 text-xs text-primary backdrop-blur-sm"
             >
               {{
-                state.openingTool === 'erase' ? 'Erasing openings' : `Placing ${state.openingTool}s`
+                state.openingTool === 'erase'
+                  ? 'Erasing openings — click panels'
+                  : state.openingTool === 'door'
+                    ? 'Placing doorway — click the dome where it goes'
+                    : `Placing ${state.openingTool}s — click panels`
               }}
-              — click panels
             </span>
           </div>
           <div class="flex items-end justify-between gap-3">

@@ -1,6 +1,7 @@
 import * as THREE from 'three'
 import type { DomeModel } from '@/engine/types'
 import type { OpeningAssignments, OpeningType } from '@/engine/openings'
+import type { DoorwayCut } from '@/engine/doorway'
 import { strutColor } from '@/engine/exports/svg'
 import type { ViewMode } from '@/composables/useDomeProject'
 
@@ -22,6 +23,9 @@ export interface BuildOptions {
   openings?: OpeningAssignments
   /** Face ids to render highlighted (opening group hover/selection). */
   highlightFaces?: number[]
+  /** Parametric doorway cuts: removed geometry is skipped, trimmed struts
+   * render as their surviving pieces, and each door gets its buck frame. */
+  doorway?: DoorwayCut
 }
 
 export interface DomePickMaps {
@@ -76,54 +80,58 @@ export function buildDomeGroup(
   const showPanels = opts.mode !== 'frame'
 
   // ---- Struts ----
+  const isRect = section?.kind === 'rect'
+  // Shared placement: strut geometry between two world points, exploded
+  // offset applied, rect boards oriented depth-radial.
+  const placeStrut = (m: THREE.Matrix4, a: THREE.Vector3, b: THREE.Vector3) => {
+    const mid = a.clone().add(b).multiplyScalar(0.5)
+    if (explodeDist > 0) mid.add(mid.clone().normalize().multiplyScalar(explodeDist))
+    const dir = b.clone().sub(a)
+    if (isRect && section && section.kind === 'rect') {
+      const yAxis = dir.clone().normalize()
+      const radial = mid.clone().normalize()
+      const zAxis = radial.clone().addScaledVector(yAxis, -yAxis.dot(radial)).normalize()
+      const xAxis = new THREE.Vector3().crossVectors(yAxis, zAxis)
+      m.makeBasis(
+        xAxis.multiplyScalar(section.width),
+        yAxis.multiplyScalar(dir.length()),
+        zAxis.multiplyScalar(section.depth),
+      )
+      m.setPosition(mid)
+    } else {
+      const q = new THREE.Quaternion().setFromUnitVectors(UP, dir.clone().normalize())
+      m.compose(mid, q, new THREE.Vector3(strutR, dir.length(), strutR))
+    }
+  }
+
+  const cutEdges = new Set<number>([
+    ...(opts.doorway?.removedEdges ?? []),
+    ...(opts.doorway?.trimmedEdges ?? []),
+  ])
+
   if (showStruts) {
-    const isRect = section?.kind === 'rect'
     const geo = isRect
       ? new THREE.BoxGeometry(1, 1, 1)
       : new THREE.CylinderGeometry(1, 1, 1, section ? 16 : 8, 1)
     for (const t of model.strutTypes) {
+      const keptEdges = t.edgeIds.filter((eid) => !cutEdges.has(eid))
+      if (keptEdges.length === 0) continue
       const mat = new THREE.MeshStandardMaterial({
         color: new THREE.Color(strutColor(t.id)),
         roughness: isRect ? 0.8 : 0.55,
         metalness: isRect ? 0.05 : 0.25,
       })
-      const mesh = new THREE.InstancedMesh(geo, mat, t.count)
+      const mesh = new THREE.InstancedMesh(geo, mat, keptEdges.length)
       mesh.name = `struts-${t.label}`
       const map: number[] = []
       const m = new THREE.Matrix4()
-      const q = new THREE.Quaternion()
-      const s = new THREE.Vector3()
-      const xAxis = new THREE.Vector3()
-      const yAxis = new THREE.Vector3()
-      const zAxis = new THREE.Vector3()
-      t.edgeIds.forEach((eid, i) => {
+      keptEdges.forEach((eid, i) => {
         const e = model.edges[eid]
-        const a = toThree(model.vertices[e.v0].position, radius)
-        const b = toThree(model.vertices[e.v1].position, radius)
-        const mid = a.clone().add(b).multiplyScalar(0.5)
-        if (explodeDist > 0) mid.add(mid.clone().normalize().multiplyScalar(explodeDist))
-        const dir = b.clone().sub(a)
-        if (isRect && section.kind === 'rect') {
-          // Board basis: length along the edge, depth (the wide face's normal
-          // span) radial, width tangent to the surface.
-          yAxis.copy(dir).normalize()
-          zAxis
-            .copy(mid)
-            .normalize()
-            .addScaledVector(yAxis, -yAxis.dot(mid.clone().normalize()))
-            .normalize()
-          xAxis.crossVectors(yAxis, zAxis)
-          m.makeBasis(
-            xAxis.multiplyScalar(section.width),
-            yAxis.clone().multiplyScalar(dir.length()),
-            zAxis.clone().multiplyScalar(section.depth),
-          )
-          m.setPosition(mid)
-        } else {
-          q.setFromUnitVectors(UP, dir.clone().normalize())
-          s.set(strutR, dir.length(), strutR)
-          m.compose(mid, q, s)
-        }
+        placeStrut(
+          m,
+          toThree(model.vertices[e.v0].position, radius),
+          toThree(model.vertices[e.v1].position, radius),
+        )
         mesh.setMatrixAt(i, m)
         mesh.setColorAt(
           i,
@@ -136,16 +144,83 @@ export function buildDomeGroup(
       pick.strutMaps.set(mesh, map)
       group.add(mesh)
     }
+
+    // Trimmed door struts: surviving pieces from hub to buck.
+    const trimmed = opts.doorway?.trimmed ?? []
+    if (trimmed.length > 0) {
+      const mesh = new THREE.InstancedMesh(geo, new THREE.MeshStandardMaterial({
+        roughness: isRect ? 0.8 : 0.55,
+        metalness: isRect ? 0.05 : 0.25,
+      }), trimmed.length)
+      mesh.name = 'struts-trimmed'
+      const m = new THREE.Matrix4()
+      trimmed.forEach((piece, i) => {
+        placeStrut(m, toThree(piece.aUnit, radius), toThree(piece.bUnit, radius))
+        mesh.setMatrixAt(i, m)
+        mesh.setColorAt(i, new THREE.Color(strutColor(piece.typeId)))
+      })
+      mesh.instanceMatrix.needsUpdate = true
+      if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true
+      group.add(mesh)
+    }
+
+    // Door bucks: two jambs + header per door, at the frame plane.
+    for (const door of opts.doorway?.doors ?? []) {
+      if (!door.fits) continue
+      const az = (door.azimuthDeg * Math.PI) / 180
+      // Engine axes: u radial, t tangent; convert to three (x, z, -y).
+      const u = new THREE.Vector3(Math.cos(az), 0, -Math.sin(az))
+      const tv = new THREE.Vector3(-Math.sin(az), 0, -Math.cos(az))
+      const z0 = model.cutZ * radius
+      const memberW = section
+        ? section.kind === 'rect'
+          ? section.width
+          : section.diameter
+        : Math.max(strutR * 2, radius * 0.012)
+      const memberD = section && section.kind === 'rect' ? section.depth : memberW
+      const mat = new THREE.MeshStandardMaterial({ color: 0xc9873a, roughness: 0.6, metalness: 0.1 })
+      const boxGeo = new THREE.BoxGeometry(1, 1, 1)
+      const addMember = (center: THREE.Vector3, sx: number, sy: number, sz: number) => {
+        const mesh = new THREE.Mesh(boxGeo, mat)
+        // Basis: x along tangent, y up, z along radial.
+        const mtx = new THREE.Matrix4().makeBasis(
+          tv.clone().multiplyScalar(sx),
+          new THREE.Vector3(0, sy, 0),
+          u.clone().multiplyScalar(sz),
+        )
+        mtx.setPosition(center)
+        mesh.applyMatrix4(mtx)
+        mesh.name = `door-${door.id}`
+        group.add(mesh)
+      }
+      const base = u.clone().multiplyScalar(door.framePlaneDist)
+      const half = door.width / 2
+      // Jambs at ±width/2, from the base plane up to the header.
+      addMember(
+        base.clone().addScaledVector(tv, half).setY(z0 + door.height / 2),
+        memberW, door.height, memberD,
+      )
+      addMember(
+        base.clone().addScaledVector(tv, -half).setY(z0 + door.height / 2),
+        memberW, door.height, memberD,
+      )
+      // Header across the top, spanning the rough opening plus both jambs.
+      addMember(
+        base.clone().setY(z0 + door.height + memberW / 2),
+        door.width + 2 * memberW, memberW, memberD,
+      )
+    }
   }
 
   // ---- Hubs ----
   if (showStruts) {
     const sphere = new THREE.SphereGeometry(1, 14, 10)
     const mat = new THREE.MeshStandardMaterial({ color: 0xd8dee9, roughness: 0.4, metalness: 0.55 })
-    const mesh = new THREE.InstancedMesh(sphere, mat, model.vertices.length)
+    const keptVertices = model.vertices.filter((v) => !opts.doorway?.removedVertices.has(v.id))
+    const mesh = new THREE.InstancedMesh(sphere, mat, keptVertices.length)
     mesh.name = 'hubs'
     const m = new THREE.Matrix4()
-    model.vertices.forEach((v, i) => {
+    keptVertices.forEach((v, i) => {
       const p = toThree(v.position, radius)
       if (explodeDist > 0)
         p.add(
@@ -175,6 +250,7 @@ export function buildDomeGroup(
     type PanelKind = 'solid' | OpeningType
     const buckets = new Map<string, { kind: PanelKind; highlight: boolean; faceIds: number[] }>()
     for (const f of model.faces) {
+      if (opts.doorway?.removedFaces.has(f.id)) continue
       const kind: PanelKind = openings[f.id] ?? 'solid'
       const highlight = highlighted.has(f.id)
       const key = `${kind}:${highlight}`

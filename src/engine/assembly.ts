@@ -28,7 +28,7 @@ const COURSE_TOL = 0.02
  * lists its ring struts and the risers connecting it to the course below —
  * the order a crew actually raises a dome.
  */
-export function buildAssemblyPlan(model: DomeModel): AssemblyPlan {
+export function buildAssemblyPlan(model: DomeModel, excludeEdgeIds?: Set<number>): AssemblyPlan {
   // Cluster vertex z's into courses.
   const zs = model.vertices.map((v) => ({ id: v.id, z: v.position[2] }))
   zs.sort((a, b) => a.z - b.z)
@@ -53,6 +53,7 @@ export function buildAssemblyPlan(model: DomeModel): AssemblyPlan {
   courses.forEach((c) => c.hubIds.forEach((h) => courseOf.set(h, c.index)))
 
   for (const e of model.edges) {
+    if (excludeEdgeIds?.has(e.id)) continue
     const c0 = courseOf.get(e.v0)!
     const c1 = courseOf.get(e.v1)!
     const upper = Math.max(c0, c1)

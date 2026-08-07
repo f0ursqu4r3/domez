@@ -16,6 +16,8 @@ export interface ProjectSettings {
   stock: { length: number; label: string }[]
   /** Panel opening assignments: faceId -> window | door | vent. */
   openings?: Record<string, string>
+  /** Parametric doorways, canonical mm. */
+  doors?: { azimuthDeg: number; widthMm: number; heightMm: number }[]
 }
 
 /** Round-trippable project file: settings drive the app; derived data is

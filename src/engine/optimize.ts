@@ -1,5 +1,6 @@
 import type { DomeModel, UnitSystem } from './types'
 import { buildCutList } from './cutlist'
+import { cutDoorways, type DoorSpec } from './doorway'
 import { packCuts, type StockLength } from './packing'
 import { workingToDiameter } from './units'
 
@@ -17,6 +18,10 @@ export interface OptimizeOptions {
   units: UnitSystem
   /** Weight on rounding error vs material waste, 0..1 (1 = only error). */
   errorWeight?: number
+  /** Parametric doorways (fixed physical size across candidate diameters). */
+  doors?: DoorSpec[]
+  /** Scrap threshold for trimmed door struts, working units. */
+  minStubLength?: number
 }
 
 export interface OptimizeCandidate {
@@ -51,12 +56,20 @@ export function optimizeDiameter(model: DomeModel, opts: OptimizeOptions): Optim
   const n = Math.max(1, Math.round((opts.maxDiameter - opts.minDiameter) / opts.step))
   for (let i = 0; i <= n; i++) {
     const diameter = opts.minDiameter + i * opts.step
-    const cutList = buildCutList(model, {
-      radius: diameter / 2,
-      increment: opts.increment,
-      endOffset: opts.endOffset,
-      units: opts.units,
-    })
+    const doorway =
+      opts.doors && opts.doors.length > 0
+        ? cutDoorways(model, opts.doors, diameter / 2, { minStubLength: opts.minStubLength ?? 0 })
+        : undefined
+    const cutList = buildCutList(
+      model,
+      {
+        radius: diameter / 2,
+        increment: opts.increment,
+        endOffset: opts.endOffset,
+        units: opts.units,
+      },
+      doorway,
+    )
     const packing = packCuts(cutList, { kerf: opts.kerf, stock: opts.stock })
     const meanError =
       cutList.rows.reduce((s, r) => s + r.roundingError, 0) / Math.max(1, cutList.rows.length)

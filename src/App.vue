@@ -15,7 +15,7 @@ import ExportPanel from '@/components/panels/ExportPanel.vue'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { ScrollArea } from '@/components/ui/scroll-area'
 
-const { state, summary, cutList } = useDomeProject()
+const { state, summary, cutList, diameter } = useDomeProject()
 
 const chips = computed(() => [
   { label: 'height', value: formatLength(summary.value.height, state.units, { long: true }) },
@@ -45,7 +45,7 @@ const chips = computed(() => [
       </div>
       <div class="ml-auto flex items-center gap-1.5 overflow-x-auto">
         <span class="rounded-md border border-primary/50 bg-primary/10 px-2.5 py-1 font-mono text-xs text-primary whitespace-nowrap">
-          {{ state.frequency }}V · {{ state.fraction }} · ⌀ {{ state.diameter }} {{ state.units === 'imperial' ? 'ft' : 'm' }}
+          {{ state.frequency }}V · {{ state.fraction }} · ⌀ {{ diameter }} {{ state.units === 'imperial' ? 'ft' : 'm' }}
         </span>
         <span
           v-for="chip in chips" :key="chip.label"

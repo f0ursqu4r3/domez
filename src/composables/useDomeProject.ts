@@ -93,19 +93,25 @@ export const MATERIALS: MaterialDef[] = [
   },
 ]
 
+const MM_PER_INCH = 25.4
+const MM_PER_FOOT = 12 * MM_PER_INCH
+const MM_PER_METER = 1000
+
 interface ProjectState {
   units: UnitSystem
   frequency: Frequency
   fraction: Fraction
   baseMode: 'natural' | 'leveled'
-  /** Diameter in display units: feet (imperial) or meters (metric). */
-  diameter: number
+  /** Physical quantities are stored canonically in millimeters, so unit
+   * switching never changes the actual dome (no display-rounding drift). */
+  diameterMm: number
+  endOffsetMm: number
+  kerfMm: number
   materialId: string
   jointId: JointMethodId
-  /** Working units: inches or mm. */
-  endOffset: number
+  /** Cut rounding increment in working units — a per-system fabrication
+   * preset (1/8" vs 1 mm are intentionally different physical values). */
   increment: number
-  kerf: number
   /** Stock lengths disabled by the user, keyed by label. */
   disabledStock: Record<string, boolean>
   viewMode: ViewMode
@@ -124,12 +130,12 @@ const state = reactive<ProjectState>({
   frequency: 5,
   fraction: '5/8',
   baseMode: 'natural',
-  diameter: 26,
+  diameterMm: 26 * MM_PER_FOOT,
+  endOffsetMm: 1.5 * MM_PER_INCH,
+  kerfMm: (1 / 8) * MM_PER_INCH,
   materialId: 'lumber-2x4',
   jointId: 'timber-plate',
-  endOffset: 1.5,
   increment: 1 / 8,
-  kerf: 1 / 8,
   disabledStock: {},
   viewMode: 'assembly',
   explode: 0.35,
@@ -137,18 +143,41 @@ const state = reactive<ProjectState>({
   optimizer: { min: 20, max: 30, result: null, running: false },
 })
 
-// Convert unit-bearing fields when the unit system flips.
+const round3 = (v: number) => Math.round(v * 1000) / 1000
+
+/** Diameter in display units (feet or meters). Reads round the canonical mm
+ * value for display only; writes set the canonical value exactly. */
+const diameter = computed({
+  get: () =>
+    round3(state.diameterMm / (state.units === 'imperial' ? MM_PER_FOOT : MM_PER_METER)),
+  set: (v: number) => {
+    if (v > 0) state.diameterMm = v * (state.units === 'imperial' ? MM_PER_FOOT : MM_PER_METER)
+  },
+})
+
+/** End offset in small display units (inches or mm). */
+const endOffset = computed({
+  get: () => round3(state.units === 'imperial' ? state.endOffsetMm / MM_PER_INCH : state.endOffsetMm),
+  set: (v: number) => {
+    if (v >= 0) state.endOffsetMm = state.units === 'imperial' ? v * MM_PER_INCH : v
+  },
+})
+
+/** Saw kerf in small display units (inches or mm). */
+const kerf = computed({
+  get: () => round3(state.units === 'imperial' ? state.kerfMm / MM_PER_INCH : state.kerfMm),
+  set: (v: number) => {
+    if (v >= 0) state.kerfMm = state.units === 'imperial' ? v * MM_PER_INCH : v
+  },
+})
+
+// Reset per-system presets when the unit system flips; canonical mm values
+// are untouched, so the physical dome is identical after a round trip.
 watch(
   () => state.units,
   (units, prev) => {
     if (units === prev) return
     const toMetric = units === 'metric'
-    const len = (v: number) => (toMetric ? v * 25.4 : v / 25.4)
-    state.diameter = toMetric
-      ? Math.round(state.diameter * 0.3048 * 100) / 100
-      : Math.round((state.diameter / 0.3048) * 100) / 100
-    state.endOffset = Math.round(len(state.endOffset) * 100) / 100
-    state.kerf = Math.round(len(state.kerf) * 100) / 100
     state.increment = toMetric ? 1 : 1 / 8
     state.optimizer.min = toMetric ? 6 : 20
     state.optimizer.max = toMetric ? 9 : 30
@@ -180,8 +209,18 @@ const model = computed(() =>
 // A new model invalidates edge/vertex ids; drop any stale selection.
 watch(model, () => (state.selection = null))
 
-const workingDiameter = computed(() => diameterToWorking(state.diameter, state.units))
+// Working units (inches or mm) derive from canonical mm, never from the
+// rounded display values.
+const workingDiameter = computed(() =>
+  state.units === 'imperial' ? state.diameterMm / MM_PER_INCH : state.diameterMm,
+)
 const radius = computed(() => workingDiameter.value / 2)
+const workingEndOffset = computed(() =>
+  state.units === 'imperial' ? state.endOffsetMm / MM_PER_INCH : state.endOffsetMm,
+)
+const workingKerf = computed(() =>
+  state.units === 'imperial' ? state.kerfMm / MM_PER_INCH : state.kerfMm,
+)
 
 const material = computed(() => MATERIALS.find((m) => m.id === state.materialId) ?? MATERIALS[0])
 const jointMethod = computed(() => JOINT_METHODS.find((j) => j.id === state.jointId) ?? JOINT_METHODS[0])
@@ -193,12 +232,14 @@ const cutList = computed(() =>
   buildCutList(model.value, {
     radius: radius.value,
     increment: state.increment,
-    endOffset: state.endOffset,
+    endOffset: workingEndOffset.value,
     units: state.units,
   }),
 )
 
-const packing = computed(() => packCuts(cutList.value, { kerf: state.kerf, stock: activeStock.value }))
+const packing = computed(() =>
+  packCuts(cutList.value, { kerf: workingKerf.value, stock: activeStock.value }),
+)
 const assemblyPlan = computed(() => buildAssemblyPlan(model.value))
 
 const increments = computed(() => (state.units === 'imperial' ? IMPERIAL_INCREMENTS : METRIC_INCREMENTS))
@@ -225,8 +266,8 @@ function runOptimizer() {
       maxDiameter: diameterToWorking(state.optimizer.max, state.units),
       step: state.units === 'imperial' ? 0.125 : 2,
       increment: state.increment,
-      endOffset: state.endOffset,
-      kerf: state.kerf,
+      endOffset: workingEndOffset.value,
+      kerf: workingKerf.value,
       stock: activeStock.value,
       units: state.units,
     })
@@ -237,7 +278,9 @@ function runOptimizer() {
 
 function applyOptimizedDiameter() {
   const best = state.optimizer.result?.best
-  if (best) state.diameter = Math.round(best.diameterDisplay * 1000) / 1000
+  if (!best) return
+  // best.diameter is exact in working units; store it canonically.
+  state.diameterMm = state.units === 'imperial' ? best.diameter * MM_PER_INCH : best.diameter
 }
 
 function download(filename: string, content: string | Blob, type = 'text/plain') {
@@ -251,20 +294,20 @@ function download(filename: string, content: string | Blob, type = 'text/plain')
 }
 
 const fileStem = computed(
-  () => `domez-${state.frequency}v-${state.fraction.replace('/', '')}-${state.diameter}${state.units === 'imperial' ? 'ft' : 'm'}`,
+  () => `domez-${state.frequency}v-${state.fraction.replace('/', '')}-${diameter.value}${state.units === 'imperial' ? 'ft' : 'm'}`,
 )
 
 const projectSettings = computed(() => ({
   frequency: state.frequency,
   fraction: state.fraction,
   baseMode: state.baseMode,
-  diameter: state.diameter,
+  diameter: diameter.value,
   units: state.units,
   material: state.materialId,
   jointMethod: state.jointId,
-  endOffset: state.endOffset,
+  endOffset: endOffset.value,
   increment: state.increment,
-  kerf: state.kerf,
+  kerf: kerf.value,
   stock: activeStock.value,
 }))
 
@@ -293,7 +336,7 @@ const exporters = {
 }
 
 function titleOf() {
-  return `DOMEZ ${state.frequency}V ${state.fraction} · ⌀ ${state.diameter} ${state.units === 'imperial' ? 'ft' : 'm'}`
+  return `DOMEZ ${state.frequency}V ${state.fraction} · ⌀ ${diameter.value} ${state.units === 'imperial' ? 'ft' : 'm'}`
 }
 
 function loadProjectFile(text: string): boolean {
@@ -303,13 +346,14 @@ function loadProjectFile(text: string): boolean {
   state.frequency = settings.frequency as Frequency
   state.fraction = settings.fraction as Fraction
   state.baseMode = (settings.baseMode as 'natural' | 'leveled') ?? 'natural'
-  state.diameter = settings.diameter
   state.materialId = settings.material
-  // Two watchers above fire on materialId/units; restore explicit values after.
+  // Two sync watchers fire on units/materialId; set explicit values after.
+  // The file stores display units; the setters store canonical mm.
+  diameter.value = settings.diameter
+  endOffset.value = settings.endOffset
+  kerf.value = settings.kerf
   state.jointId = settings.jointMethod as JointMethodId
-  state.endOffset = settings.endOffset
   state.increment = settings.increment
-  state.kerf = settings.kerf
   state.selection = null
   return true
 }
@@ -320,6 +364,9 @@ export function useDomeProject() {
     model,
     radius,
     workingDiameter,
+    diameter,
+    endOffset,
+    kerf,
     material,
     jointMethod,
     availableStock,

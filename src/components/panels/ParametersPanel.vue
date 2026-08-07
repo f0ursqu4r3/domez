@@ -17,7 +17,7 @@ import {
 import { Zap } from '@lucide/vue'
 
 const project = useDomeProject()
-const { state, increments, availableStock, jointMethod } = project
+const { state, increments, availableStock, jointMethod, diameter, endOffset, kerf } = project
 
 const frequency = computed({
   get: () => String(state.frequency),
@@ -75,9 +75,9 @@ const best = computed(() => state.optimizer.result?.best ?? null)
             type="number"
             :step="state.units === 'imperial' ? 0.125 : 0.05"
             min="1"
-            :model-value="state.diameter"
+            :model-value="diameter"
             class="font-mono"
-            @update:model-value="(v) => { const n = Number(v); if (n > 0) state.diameter = n }"
+            @update:model-value="(v) => { const n = Number(v); if (n > 0) diameter = n }"
           />
         </Field>
         <Field>
@@ -129,8 +129,8 @@ const best = computed(() => state.optimizer.result?.best ?? null)
           <FieldLabel>End offset per strut end <span class="text-muted-foreground">({{ smallUnit }})</span></FieldLabel>
           <Input
             type="number" step="0.05" min="0" class="font-mono"
-            :model-value="state.endOffset"
-            @update:model-value="(v) => { const n = Number(v); if (n >= 0) state.endOffset = n }"
+            :model-value="endOffset"
+            @update:model-value="(v) => { const n = Number(v); if (n >= 0) endOffset = n }"
           />
         </Field>
       </FieldGroup>
@@ -158,8 +158,8 @@ const best = computed(() => state.optimizer.result?.best ?? null)
           <FieldLabel>Saw kerf <span class="text-muted-foreground">({{ smallUnit }})</span></FieldLabel>
           <Input
             type="number" step="0.05" min="0" class="font-mono"
-            :model-value="state.kerf"
-            @update:model-value="(v) => { const n = Number(v); if (n >= 0) state.kerf = n }"
+            :model-value="kerf"
+            @update:model-value="(v) => { const n = Number(v); if (n >= 0) kerf = n }"
           />
         </Field>
         <Field>

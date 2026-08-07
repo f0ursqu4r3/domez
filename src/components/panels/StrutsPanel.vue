@@ -7,7 +7,7 @@ import {
 } from '@/components/ui/table'
 import { Badge } from '@/components/ui/badge'
 
-const { state, cutList, model } = useDomeProject()
+const { state, cutList, model, endOffset } = useDomeProject()
 
 function selectType(typeId: number) {
   const first = model.value.strutTypes[typeId]?.edgeIds[0]
@@ -60,7 +60,7 @@ function selectType(typeId: number) {
     </div>
     <p class="text-xs text-muted-foreground leading-relaxed">
       Cut lengths include the joint end offset
-      (<span class="font-mono">{{ formatLength(state.endOffset, state.units) }}</span> per end).
+      (<span class="font-mono">{{ formatLength(endOffset, state.units) }}</span> per end).
       Hole-to-hole / geometric chord lengths are in the CSV export.
       <Badge v-if="state.baseMode === 'leveled'" variant="secondary" class="ml-1">leveled base adds types</Badge>
     </p>

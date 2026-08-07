@@ -6,7 +6,7 @@ import { buildCutList } from '../cutlist'
 import { packCuts } from '../packing'
 import { optimizeDiameter } from '../optimize'
 import { analyzeOpenings } from '../openings'
-import { cutDoorways } from '../doorway'
+import { cutDoorways, optimizeDoorPlacement } from '../doorway'
 import { formatFeetInches, formatInchesFractional, roundToIncrement } from '../units'
 import { cross, dot, sub, add, length } from '../vec'
 
@@ -330,6 +330,49 @@ describe('parametric doorways', () => {
     expect(frameRows).toHaveLength(2)
     expect(frameRows.find((r) => r.label === 'D1 jamb')!.quantity).toBe(2)
     expect(frameRows.find((r) => r.label === 'D1 header')!.roundedCutLength).toBe(36)
+  })
+
+  it('optimizes placement: never worse, deterministic, and hub-avoiding', () => {
+    // Park the door dead on a base hub azimuth — a deliberately bad spot.
+    const baseHub = dome.vertices.find((v) => v.isBase)!
+    const badAz =
+      ((Math.atan2(baseHub.position[1], baseHub.position[0]) * 180) / Math.PI + 360) % 360
+    const spec = { id: 'D1', azimuthDeg: badAz, width: 36, height: 80 }
+    const opts = { minStubLength: 6, increment: 1 / 8 }
+
+    const result = optimizeDoorPlacement(dome, spec, R, opts)
+    expect(result.after.score).toBeLessThanOrEqual(result.before.score)
+    expect(result.evaluated).toBeGreaterThan(100)
+    // The bad spot removes hubs; the optimizer should not do worse.
+    expect(result.after.hubsRemoved).toBeLessThanOrEqual(result.before.hubsRemoved)
+
+    // Deterministic: same input, same answer.
+    const again = optimizeDoorPlacement(dome, spec, R, opts)
+    expect(again.azimuthDeg).toBe(result.azimuthDeg)
+
+    // Applying the result reproduces the reported stats.
+    const applied = cutDoorways(
+      dome,
+      [{ ...spec, azimuthDeg: result.azimuthDeg }],
+      R,
+      { minStubLength: 6 },
+    )
+    expect(applied.doors[0].trimmedStrutCount).toBe(result.after.trimmed)
+    expect(applied.doors[0].removedHubCount).toBe(result.after.hubsRemoved)
+  })
+
+  it('placement optimizer keeps clear of other doors', () => {
+    const spec = { id: 'D1', azimuthDeg: 20, width: 36, height: 80 }
+    const other = { id: 'D2', azimuthDeg: 30, width: 36, height: 80 }
+    const result = optimizeDoorPlacement(dome, spec, R, {
+      minStubLength: 6,
+      increment: 1 / 8,
+      otherDoors: [other],
+    })
+    let delta = Math.abs(result.azimuthDeg - other.azimuthDeg) % 360
+    if (delta > 180) delta = 360 - delta
+    // Clearance: half-widths (~13.5° combined for 36" doors on r=155") + 5° margin.
+    expect(delta).toBeGreaterThan(13)
   })
 
   it('no doors → cut list is unchanged', () => {

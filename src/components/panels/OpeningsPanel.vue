@@ -10,10 +10,25 @@ import { Input } from '@/components/ui/input'
 import { Field, FieldLabel } from '@/components/ui/field'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '@/components/ui/empty'
-import { DoorOpen, AppWindow, Fan, Eraser, Trash2, TriangleAlert, X } from '@lucide/vue'
+import { DoorOpen, AppWindow, Fan, Eraser, Sparkles, Trash2, TriangleAlert, X } from '@lucide/vue'
+import type { DoorPlacementResult } from '@/engine/doorway'
+import { ref, watch } from 'vue'
 
 const project = useDomeProject()
 const { state, openingGroups, doorway } = project
+
+/** Last placement-optimization summary per door index. */
+const placementResults = ref<Record<number, DoorPlacementResult>>({})
+// Door list changes shift indices — drop stale summaries.
+watch(
+  () => state.doors.length,
+  () => (placementResults.value = {}),
+)
+
+function optimizePlacement(index: number) {
+  const result = project.optimizeDoorPosition(index)
+  if (result) placementResults.value = { ...placementResults.value, [index]: result }
+}
 
 const MM_PER_INCH = 25.4
 const smallUnit = computed(() => (state.units === 'imperial' ? 'in' : 'mm'))
@@ -157,6 +172,24 @@ function toggleHighlight(label: string) {
           <dt class="text-muted-foreground">Buck plane inset</dt>
           <dd class="text-right font-mono">{{ formatLength(door.tunnelDepth, state.units) }}</dd>
         </dl>
+
+        <Button size="sm" variant="outline" class="w-full" @click="optimizePlacement(i)">
+          <Sparkles data-icon="inline-start" />
+          Optimize placement
+        </Button>
+        <p v-if="placementResults[i]" class="text-xs leading-relaxed" :class="placementResults[i].improved ? 'text-primary' : 'text-muted-foreground'">
+          <template v-if="placementResults[i].improved">
+            Moved {{ placementResults[i].fromAzimuthDeg.toFixed(0) }}° →
+            {{ placementResults[i].azimuthDeg.toFixed(2) }}° · trims
+            {{ placementResults[i].before.trimmed }} → {{ placementResults[i].after.trimmed }} ·
+            hubs out {{ placementResults[i].before.hubsRemoved }} →
+            {{ placementResults[i].after.hubsRemoved }} · custom lengths
+            {{ placementResults[i].before.distinctTrims }} → {{ placementResults[i].after.distinctTrims }}
+          </template>
+          <template v-else>
+            Already at the cleanest bearing within ±36° ({{ placementResults[i].evaluated }} positions checked).
+          </template>
+        </p>
 
         <p v-if="!door.fits" class="flex items-center gap-1.5 text-xs text-destructive">
           <TriangleAlert class="size-3.5 shrink-0" />

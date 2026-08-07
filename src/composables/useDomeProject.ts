@@ -10,7 +10,13 @@ import {
   type OpeningGroup,
   type OpeningType,
 } from '@/engine/openings'
-import { cutDoorways, emptyDoorwayCut, type DoorSpec } from '@/engine/doorway'
+import {
+  cutDoorways,
+  emptyDoorwayCut,
+  optimizeDoorPlacement,
+  type DoorPlacementResult,
+  type DoorSpec,
+} from '@/engine/doorway'
 import { diameterToWorking, IMPERIAL_INCREMENTS, METRIC_INCREMENTS } from '@/engine/units'
 import type { Fraction, Frequency, UnitSystem } from '@/engine/types'
 import { cutListCsv, hubsCsv, boardsCsv, openingsCsv } from '@/engine/exports/csv'
@@ -379,6 +385,20 @@ function removeDoor(index: number) {
   state.doors.splice(index, 1)
 }
 
+/** Snap a door to the nearest bearing where the passage meets the frame
+ * cleanly (fewest hubs in the opening, fewest and least-fussy trims). */
+function optimizeDoorPosition(index: number): DoorPlacementResult | null {
+  const spec = doorSpecs.value[index]
+  if (!spec) return null
+  const result = optimizeDoorPlacement(model.value, spec, radius.value, {
+    minStubLength: minStubLength.value,
+    increment: state.increment,
+    otherDoors: doorSpecs.value.filter((_, i) => i !== index),
+  })
+  state.doors[index].azimuthDeg = result.azimuthDeg
+  return result
+}
+
 function removeOpeningGroup(group: OpeningGroup) {
   for (const fid of group.faceIds) delete state.openings[fid]
   if (state.highlightOpening === group.label) state.highlightOpening = null
@@ -594,6 +614,7 @@ export function useDomeProject() {
     paintFace,
     addDoorAt,
     removeDoor,
+    optimizeDoorPosition,
     removeOpeningGroup,
     clearOpenings,
     increments,

@@ -69,6 +69,37 @@ export function emptyDoorwayCut(): DoorwayCut {
   }
 }
 
+export interface PlacementStats {
+  trimmed: number
+  removed: number
+  hubsRemoved: number
+  /** Count of distinct trimmed cut lengths (custom cuts to make). */
+  distinctTrims: number
+  /** Trimmed pieces shorter than twice the scrap floor — fussy stubs. */
+  shortPieces: number
+  score: number
+}
+
+export interface DoorPlacementResult {
+  fromAzimuthDeg: number
+  azimuthDeg: number
+  before: PlacementStats
+  after: PlacementStats
+  improved: boolean
+  evaluated: number
+}
+
+export interface PlacementOptions extends DoorwayOptions {
+  /** Search window each side of the current bearing. 36° covers the full
+   * unique pattern of an icosahedral dome (72° period × mirror). */
+  searchHalfWidthDeg?: number
+  stepDeg?: number
+  /** Rounding increment used to group trimmed lengths into distinct cuts. */
+  increment: number
+  /** Other doors to keep clear of. */
+  otherDoors?: DoorSpec[]
+}
+
 interface DoorFrame {
   spec: DoorSpec
   /** Radial horizontal unit vector at the azimuth. */
@@ -277,4 +308,92 @@ export function cutDoorways(
 
   result.doors = doors.map((d) => perDoor.get(d.id)!)
   return result
+}
+
+/** Score a single door placement: lower = cleaner. Hubs inside the passage
+ * are the worst offense; trims and distinct custom lengths are the mess a
+ * builder feels; removing whole struts is largely what a door SHOULD do. */
+function placementStats(
+  model: DomeModel,
+  spec: DoorSpec,
+  radius: number,
+  opts: PlacementOptions,
+): PlacementStats {
+  const cut = cutDoorways(model, [spec], radius, { minStubLength: opts.minStubLength })
+  const info = cut.doors[0]
+  const distinct = new Set(
+    cut.trimmed.map((t) => Math.round(t.length / Math.max(opts.increment, 1e-9))),
+  )
+  const shortLimit = opts.minStubLength * 2
+  const shortPieces = cut.trimmed.filter((t) => t.length < shortLimit).length
+  const stats: PlacementStats = {
+    trimmed: info.trimmedStrutCount,
+    removed: info.removedStrutCount,
+    hubsRemoved: info.removedHubCount,
+    distinctTrims: distinct.size,
+    shortPieces,
+    score: 0,
+  }
+  stats.score =
+    stats.hubsRemoved * 10 +
+    stats.trimmed * 3 +
+    stats.distinctTrims * 2 +
+    stats.shortPieces * 2 +
+    stats.removed * 0.25
+  return stats
+}
+
+/**
+ * Find the bearing near the door's current position where the doorway meets
+ * the frame most cleanly. Ties resolve to the bearing closest to where the
+ * user put the door.
+ */
+export function optimizeDoorPlacement(
+  model: DomeModel,
+  spec: DoorSpec,
+  radius: number,
+  opts: PlacementOptions,
+): DoorPlacementResult {
+  const halfWidth = opts.searchHalfWidthDeg ?? 36
+  const step = opts.stepDeg ?? 0.25
+  const before = placementStats(model, spec, radius, opts)
+
+  // Keep clear of other doors: candidate centers must stay outside the
+  // combined angular half-widths (plus a small margin) of every other door.
+  const rBase = Math.sqrt(Math.max(0, 1 - model.cutZ * model.cutZ)) * radius
+  const clearanceDeg = (otherWidth: number) =>
+    ((Math.asin(Math.min(1, (spec.width / 2 + otherWidth / 2) / rBase)) * 180) / Math.PI) + 5
+  const blocked = (az: number) =>
+    (opts.otherDoors ?? []).some((d) => {
+      let delta = Math.abs(az - d.azimuthDeg) % 360
+      if (delta > 180) delta = 360 - delta
+      return delta < clearanceDeg(d.width)
+    })
+
+  let best = { azimuthDeg: spec.azimuthDeg, stats: before, distance: 0 }
+  let evaluated = 1
+  const n = Math.round(halfWidth / step)
+  for (let i = -n; i <= n; i++) {
+    if (i === 0) continue
+    const az = (((spec.azimuthDeg + i * step) % 360) + 360) % 360
+    if (blocked(az)) continue
+    const stats = placementStats(model, { ...spec, azimuthDeg: az }, radius, opts)
+    evaluated++
+    const distance = Math.abs(i * step)
+    if (
+      stats.score < best.stats.score - 1e-9 ||
+      (Math.abs(stats.score - best.stats.score) <= 1e-9 && distance < best.distance)
+    ) {
+      best = { azimuthDeg: az, stats, distance }
+    }
+  }
+
+  return {
+    fromAzimuthDeg: spec.azimuthDeg,
+    azimuthDeg: Math.round(best.azimuthDeg * 4) / 4,
+    before,
+    after: best.stats,
+    improved: best.stats.score < before.score - 1e-9,
+    evaluated,
+  }
 }

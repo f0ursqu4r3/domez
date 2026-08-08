@@ -17,9 +17,10 @@ import {
   type DoorPlacementResult,
   type DoorSpec,
 } from '@/engine/doorway'
+import { planPanels } from '@/engine/panels'
 import { diameterToWorking, IMPERIAL_INCREMENTS, METRIC_INCREMENTS } from '@/engine/units'
 import type { Fraction, Frequency, UnitSystem } from '@/engine/types'
-import { cutListCsv, hubsCsv, boardsCsv, openingsCsv } from '@/engine/exports/csv'
+import { cutListCsv, hubsCsv, boardsCsv, openingsCsv, panelsCsv } from '@/engine/exports/csv'
 import { domeObj } from '@/engine/exports/obj'
 import { fabricationSvg, hubLabelsSvg } from '@/engine/exports/svg'
 import { fabricationDxf } from '@/engine/exports/dxf'
@@ -160,6 +161,9 @@ interface ProjectState {
   doors: { azimuthDeg: number; widthMm: number; heightMm: number; depthMm: number; marginMm: number }[]
   /** Render the extruded-entry closure sealing the shell back to each buck. */
   closeDoorways: boolean
+  /** Which face(s) of the frame the skin panels mount to. 'both' doubles
+   * the panel material takeoff. */
+  panelPlacement: 'outside' | 'inside' | 'both'
   /** Active viewer tool. 'door' places a doorway at the clicked azimuth;
    * window/vent paint panels; 'off' restores strut/hub picking. */
   openingTool: 'off' | OpeningType | 'erase'
@@ -192,6 +196,7 @@ const state = reactive<ProjectState>({
   openings: {},
   doors: [],
   closeDoorways: true,
+  panelPlacement: 'outside',
   openingTool: 'off',
   highlightOpening: null,
   selection: null,
@@ -372,6 +377,27 @@ const doorway = computed(() =>
       }),
 )
 
+/** Standard sheet-good size for the skin panels. */
+const panelSheet = computed(() =>
+  state.units === 'imperial'
+    ? { w: 48, l: 96, label: '4×8 ft sheet' }
+    : { w: 1220, l: 2440, label: '1220×2440 mm sheet' },
+)
+
+/** Skin panel takeoff: solid panels only (openings and doorway cuts are
+ * not skinned), doubled when panels mount inside AND outside. */
+const panelPlan = computed(() => {
+  const exclude = new Set<number>(doorway.value.removedFaces)
+  for (const key of Object.keys(state.openings)) exclude.add(Number(key))
+  return planPanels(model.value, radius.value, {
+    sheetW: panelSheet.value.w,
+    sheetL: panelSheet.value.l,
+    sheetLabel: panelSheet.value.label,
+    excludeFaceIds: exclude,
+    skinFactor: state.panelPlacement === 'both' ? 2 : 1,
+  })
+})
+
 /** Paint/erase a panel with the active opening tool (viewer click handler). */
 function paintFace(faceId: number) {
   if (state.openingTool === 'off' || state.openingTool === 'door') return
@@ -499,6 +525,7 @@ const projectSettings = computed(() => ({
   stock: activeStock.value,
   openings: { ...state.openings },
   doors: state.doors.map((d) => ({ ...d })),
+  panelPlacement: state.panelPlacement,
 }))
 
 const exporters = {
@@ -513,6 +540,8 @@ const exporters = {
       openingsCsv(openingGroups.value, doorway.value.doors, state.units),
       'text/csv',
     ),
+  panelsCsv: () =>
+    download(`${fileStem.value}-panels.csv`, panelsCsv(panelPlan.value, state.units), 'text/csv'),
   svg: () =>
     download(
       `${fileStem.value}-fabrication.svg`,
@@ -550,6 +579,7 @@ const exporters = {
       openings: state.openings,
       doorway: doorway.value,
       closeDoorways: state.closeDoorways,
+      panelPlacement: state.panelPlacement,
     })
     const exporter = new GLTFExporter()
     const result = await exporter.parseAsync(group, { binary: true })
@@ -610,6 +640,13 @@ function loadProjectFile(text: string): boolean {
       depthMm: typeof d.depthMm === 'number' ? d.depthMm : 0,
       marginMm: typeof d.marginMm === 'number' && d.marginMm > 0 ? d.marginMm : 0,
     }))
+  if (
+    settings.panelPlacement === 'outside' ||
+    settings.panelPlacement === 'inside' ||
+    settings.panelPlacement === 'both'
+  ) {
+    state.panelPlacement = settings.panelPlacement
+  }
   state.selection = null
   return true
 }
@@ -634,6 +671,7 @@ export function useDomeProject() {
     openingGroups,
     doorway,
     doorSpecs,
+    panelPlan,
     paintFace,
     addDoorAt,
     removeDoor,

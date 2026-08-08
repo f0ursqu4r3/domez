@@ -192,8 +192,10 @@ export function buildCutList(
       }
       const framingNote: Record<string, string> = {
         'wall plate': `${door.id} closure wall bottom plate, square cuts`,
-        'wall stud': `${door.id} closure wall stud; top lands on the shell edge`,
-        'top blocking': `${door.id} closure top blocking, header to shell`,
+        'wall stud': `${door.id} closure wall stud; ends land on plate and shell edge`,
+        'top blocking': `${door.id} closure top blocking, buck to shell`,
+        'shell edge': `${door.id} closure rake along the shell facet — trimmed struts land here`,
+        'top edge': `${door.id} closure roof edge along the shell facet`,
       }
       for (const g of [...framingGroups.values()].sort(
         (a, b) => a.part.localeCompare(b.part) || b.rounded - a.rounded,

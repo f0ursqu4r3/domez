@@ -7,7 +7,10 @@ import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { TriangleAlert } from '@lucide/vue'
 
-const { state, packing, material, cutList } = useDomeProject()
+const { state, packing, material, cutList, panelPlan } = useDomeProject()
+
+const panelAreaText = (a: number) =>
+  state.units === 'imperial' ? `${(a / 144).toFixed(1)} ft²` : `${(a / 1e6).toFixed(2)} m²`
 
 const stats = computed(() => [
   { label: 'Boards', value: String(packing.value.boards.length) },
@@ -67,6 +70,33 @@ const stats = computed(() => [
     </div>
 
     <div class="flex flex-col gap-1 flex-1 min-h-0">
+      <div class="flex flex-col gap-1.5 rounded-md border border-border bg-card p-3">
+        <div class="flex items-baseline justify-between">
+          <h4 class="text-xs uppercase tracking-widest text-muted-foreground">
+            Skin panels — {{ panelPlan.sheetLabel }}s
+          </h4>
+          <span class="font-mono text-xs">
+            <span class="text-primary font-semibold">{{ panelPlan.totalSheets }}×</span> sheets ·
+            {{ (panelPlan.wasteFraction * 100).toFixed(0) }}% waste
+            <span v-if="panelPlan.skinFactor === 2" class="text-muted-foreground">· 2 skins</span>
+          </span>
+        </div>
+        <div
+          v-for="t in panelPlan.types"
+          :key="t.label"
+          class="flex items-baseline gap-2 font-mono text-[11px]"
+        >
+          <span class="font-semibold w-7">{{ t.label }}</span>
+          <span>×{{ t.count }}</span>
+          <span class="text-muted-foreground truncate">
+            {{ t.edges.map((e) => e.toFixed(1)).join(' / ') }} · {{ panelAreaText(t.area) }}
+          </span>
+          <span class="ml-auto whitespace-nowrap">
+            {{ t.seamed ? `seamed · ${t.sheets} sh` : `${t.perSheet}/sh · ${t.sheets} sh` }}
+          </span>
+        </div>
+      </div>
+
       <h4 class="text-xs uppercase tracking-widest text-muted-foreground">Cutting diagrams</h4>
       <ScrollArea class="flex-1 min-h-0 pr-3">
         <div class="flex flex-col gap-1.5">

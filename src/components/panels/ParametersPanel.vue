@@ -154,6 +154,23 @@ const best = computed(() => state.optimizer.result?.best ?? null)
           <FieldDescription>{{ jointMethod.note }}</FieldDescription>
         </Field>
         <Field>
+          <FieldLabel>Panel skin</FieldLabel>
+          <ToggleGroup
+            :model-value="state.panelPlacement"
+            type="single"
+            variant="outline"
+            class="w-full"
+            @update:model-value="(v: any) => v && (state.panelPlacement = v)"
+          >
+            <ToggleGroupItem value="outside" class="flex-1 text-xs">Outside</ToggleGroupItem>
+            <ToggleGroupItem value="inside" class="flex-1 text-xs">Inside</ToggleGroupItem>
+            <ToggleGroupItem value="both" class="flex-1 text-xs">Both</ToggleGroupItem>
+          </ToggleGroup>
+          <FieldDescription>
+            Which strut face the skin mounts to — both doubles the sheet takeoff.
+          </FieldDescription>
+        </Field>
+        <Field>
           <FieldLabel
             >End offset per strut end
             <span class="text-muted-foreground">({{ smallUnit }})</span></FieldLabel

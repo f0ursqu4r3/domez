@@ -29,6 +29,8 @@ export interface BuildOptions {
   /** Render the extruded-entry closure sealing the shell back to each buck
    * (side walls + top from the buck plane out to the sphere). Default true. */
   closeDoorways?: boolean
+  /** Which strut face the skin panels mount to. Default 'outside'. */
+  panelPlacement?: 'outside' | 'inside' | 'both'
 }
 
 export interface DomePickMaps {
@@ -225,7 +227,9 @@ export function buildDomeGroup(
           positions.push(a.x, a.y, a.z, b.x, b.y, b.z, c.x, c.y, c.z)
           positions.push(a.x, a.y, a.z, c.x, c.y, c.z, d.x, d.y, d.z)
         }
-        // Side walls: faceted profile down to the base plane.
+        // Side walls: seal between the faceted shell and the buck plane —
+        // recessed side (u ≥ buck) from base to shell, projecting side
+        // (u ≤ buck) from shell up to the roof.
         for (const [side, wall] of [
           [1, profile.wallPos],
           [-1, profile.wallNeg],
@@ -234,19 +238,34 @@ export function buildDomeGroup(
           for (let i = 1; i < wall.length; i++) {
             const [u0, h0] = wall[i - 1]
             const [u1, h1] = wall[i]
-            if (h0 <= 1e-6 && h1 <= 1e-6) continue
-            quad(P(u0, t, 0), P(u0, t, h0), P(u1, t, h1), P(u1, t, 0))
+            const mid = (u0 + u1) / 2
+            if (mid >= door.framePlaneDist) {
+              if (h0 <= 1e-6 && h1 <= 1e-6) continue
+              quad(P(u0, t, 0), P(u0, t, h0), P(u1, t, h1), P(u1, t, 0))
+            } else {
+              if (h0 >= profile.topHeight - 1e-6 && h1 >= profile.topHeight - 1e-6) continue
+              quad(
+                P(u0, t, h0),
+                P(u0, t, profile.topHeight),
+                P(u1, t, profile.topHeight),
+                P(u1, t, h1),
+              )
+            }
           }
         }
-        // Top plane: faceted profile back to the buck plane.
+        // Top plane: between the roof-plane shell crossing and the buck.
         for (let i = 1; i < profile.top.length; i++) {
           const [t0, u0] = profile.top[i - 1]
           const [t1, u1] = profile.top[i]
-          if (u0 - door.framePlaneDist <= 1e-6 && u1 - door.framePlaneDist <= 1e-6) continue
+          if (
+            Math.abs(u0 - door.framePlaneDist) <= 1e-6 &&
+            Math.abs(u1 - door.framePlaneDist) <= 1e-6
+          )
+            continue
           quad(
             P(door.framePlaneDist, t0, profile.topHeight),
-            P(u0, t0, profile.topHeight),
-            P(u1, t1, profile.topHeight),
+            P(Math.max(u0, 1e-3), t0, profile.topHeight),
+            P(Math.max(u1, 1e-3), t1, profile.topHeight),
             P(door.framePlaneDist, t1, profile.topHeight),
           )
         }
@@ -277,24 +296,66 @@ export function buildDomeGroup(
           group.add(closure)
         }
 
-        // Closure stick framing: plates, studs, top blocking (per side).
+        // Closure stick framing: every member runs between its endpoints —
+        // plates, studs, shell-edge rakes, roof blocking and edges — so the
+        // frame reads as connected sticks.
+        const memberWorld = (m: (typeof door.closureFraming)[number], e: [number, number]) =>
+          m.side === 0
+            ? P(Math.max(e[1], 1e-3), e[0], profile.topHeight)
+            : P(e[0], m.side * halfEnv, e[1])
+        const jointPts: THREE.Vector3[] = []
+        const barGeo = new THREE.BoxGeometry(1, 1, 1)
+        const barMat = new THREE.MeshStandardMaterial({
+          color: 0xc9873a,
+          roughness: 0.6,
+          metalness: 0.1,
+        })
         for (const member of door.closureFraming) {
-          if (member.part === 'wall plate') {
-            addMember(
-              P(member.at + member.length / 2, member.side * halfEnv, memberW / 2),
-              memberW, memberW, member.length,
-            )
-          } else if (member.part === 'wall stud') {
-            addMember(
-              P(member.at, member.side * halfEnv, member.length / 2),
-              memberW, member.length, memberD,
-            )
-          } else {
-            addMember(
-              P(door.framePlaneDist + member.length / 2, member.at, profile.topHeight - memberW / 2),
-              memberW, memberW, member.length,
-            )
-          }
+          const a = memberWorld(member, member.a)
+          const b = memberWorld(member, member.b)
+          const dir = b.clone().sub(a)
+          const len = dir.length()
+          if (len < 1e-6) continue
+          const bar = new THREE.Mesh(barGeo, barMat)
+          const yAxis = dir.clone().normalize()
+          // Any perpendicular works for a square section.
+          const ref = Math.abs(yAxis.y) > 0.9 ? new THREE.Vector3(1, 0, 0) : new THREE.Vector3(0, 1, 0)
+          const xAxis = new THREE.Vector3().crossVectors(yAxis, ref).normalize()
+          const zAxis = new THREE.Vector3().crossVectors(xAxis, yAxis)
+          const mtx = new THREE.Matrix4().makeBasis(
+            xAxis.multiplyScalar(memberW),
+            yAxis.multiplyScalar(len),
+            zAxis.multiplyScalar(Math.min(memberD, memberW * 1.5)),
+          )
+          mtx.setPosition(a.clone().add(b).multiplyScalar(0.5))
+          bar.applyMatrix4(mtx)
+          bar.name = `door-framing-${door.id}`
+          group.add(bar)
+          jointPts.push(a, b)
+        }
+        // Buck corners are junctions too.
+        jointPts.push(P(door.framePlaneDist, -half, 0), P(door.framePlaneDist, half, 0))
+        jointPts.push(
+          P(door.framePlaneDist, -half, door.height),
+          P(door.framePlaneDist, half, door.height),
+        )
+        // Connector nodes at unique junctions.
+        const seen = new Set<string>()
+        const jointGeo = new THREE.SphereGeometry(1, 10, 8)
+        const jointMat = new THREE.MeshStandardMaterial({
+          color: 0xd8dee9,
+          roughness: 0.4,
+          metalness: 0.55,
+        })
+        for (const p of jointPts) {
+          const key = `${Math.round(p.x * 2)}:${Math.round(p.y * 2)}:${Math.round(p.z * 2)}`
+          if (seen.has(key)) continue
+          seen.add(key)
+          const joint = new THREE.Mesh(jointGeo, jointMat)
+          joint.scale.setScalar(Math.max(memberW * 0.7, radius * 0.004))
+          joint.position.copy(p)
+          joint.name = `door-joint-${door.id}`
+          group.add(joint)
         }
       }
     }
@@ -376,6 +437,16 @@ export function buildDomeGroup(
       })
     }
 
+    // Skin placement: panels sit on the outside face of the struts, the
+    // inside face, or both (two skins).
+    const strutDepth = section ? (section.kind === 'rect' ? section.depth : section.diameter) : strutR * 2
+    const skinOffsets =
+      opts.panelPlacement === 'inside'
+        ? [-(strutDepth / 2)]
+        : opts.panelPlacement === 'both'
+          ? [strutDepth / 2, -(strutDepth / 2)]
+          : [strutDepth / 2]
+
     for (const bucket of buckets.values()) {
       const positions: number[] = []
       const normals: number[] = []
@@ -400,12 +471,15 @@ export function buildDomeGroup(
           .subVectors(pts[1], pts[0])
           .cross(new THREE.Vector3().subVectors(pts[2], pts[0]))
           .normalize()
-        for (const p of pts) {
-          const q = offset ? p.clone().add(offset) : p
-          positions.push(q.x, q.y, q.z)
-          normals.push(n.x, n.y, n.z)
+        for (const skin of skinOffsets) {
+          for (const p of pts) {
+            const q = p.clone().addScaledVector(n, skin)
+            if (offset) q.add(offset)
+            positions.push(q.x, q.y, q.z)
+            normals.push(n.x, n.y, n.z)
+          }
+          faceMap.push(fid)
         }
-        faceMap.push(fid)
       }
       const geo = new THREE.BufferGeometry()
       geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3))

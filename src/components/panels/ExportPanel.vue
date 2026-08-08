@@ -51,6 +51,12 @@ const groups = [
         run: exporters.openingsCsv,
       },
       {
+        label: 'Panels CSV',
+        desc: 'skin panels per plywood sheet',
+        icon: FileSpreadsheet,
+        run: exporters.panelsCsv,
+      },
+      {
         label: 'Fabrication SVG',
         desc: 'printable strut drawings',
         icon: PencilRuler,

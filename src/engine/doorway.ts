@@ -33,15 +33,17 @@ export interface TrimmedStrut {
 }
 
 export interface ClosureMember {
-  part: 'wall plate' | 'wall stud' | 'top blocking'
+  part: 'wall plate' | 'wall stud' | 'top blocking' | 'shell edge' | 'top edge'
   /** Cut length, working units. */
   length: number
   quantity: number
-  /** Position: radial distance (plate start / stud center) or tangential
-   * offset (top blocking), working units. */
-  at: number
-  /** Which side wall the piece belongs to (+1 / -1 tangential); 0 = top. */
+  /** Which side wall the piece belongs to (+1 / -1 tangential); 0 = top plane. */
   side: -1 | 0 | 1
+  /** Endpoints in the member's plane, working units. Wall members (side ±1):
+   * (radialDist, heightAboveBase). Top-plane members (side 0):
+   * (tangentialOffset, radialDist) at the envelope top. */
+  a: [number, number]
+  b: [number, number]
 }
 
 /** Faceted closure outline, sectioned from the actual triangulated shell
@@ -67,7 +69,8 @@ export interface DoorFrameInfo extends DoorSpec {
   headerLength: number
   /** Distance of the vertical buck plane from the dome axis. */
   framePlaneDist: number
-  /** How far the buck plane sits inside the base ring at the door center. */
+  /** How far the buck plane sits inside the base ring at the door center.
+   * Negative when the entry projects beyond the base ring. */
   tunnelDepth: number
   /** False when the rectangle does not fit inside the shell (too tall/wide). */
   fits: boolean
@@ -86,6 +89,8 @@ export interface DoorFrameInfo extends DoorSpec {
   closureFaceArea: number
   /** Stick framing for the closure, cut-list ready. */
   closureFraming: ClosureMember[]
+  /** Unique framing junctions (member ends + buck corners) — connector count. */
+  closureJointCount: number
   /** Faceted closure outline for rendering; null when the door doesn't fit. */
   closureProfile: ClosureProfile | null
 }
@@ -116,6 +121,10 @@ export interface PlacementStats {
   distinctTrims: number
   /** Trimmed pieces shorter than twice the scrap floor — fussy stubs. */
   shortPieces: number
+  /** Distance from the door's center plane to the nearest hub or strut
+   * midline in the door zone — 0 means the entry is visually centered on
+   * the frame pattern. Working units. */
+  centerOffset: number
   score: number
 }
 
@@ -160,8 +169,10 @@ interface DoorFrame {
   /** Cut envelope: buck + margin. */
   halfWidth: number
   height: number
-  /** Cutting starts at the buck plane — struts behind it pass through. */
-  framePlaneDist: number
+  /** Cutting starts here — the buck plane, or the auto-fit plane when the
+   * buck projects beyond it (the walkway must still pierce the shell).
+   * Struts behind this plane pass through untouched. */
+  cutPlaneDist: number
 }
 
 /** Interval [s0, s1] of a segment inside the door passage, or null. The
@@ -191,7 +202,7 @@ function insideInterval(frame: DoorFrame, a: Vec3, b: Vec3): [number, number] | 
   if (!clip(zA, zB, -1e9, frame.height)) return null
   const uA = frame.ux * a[0] + frame.uy * a[1]
   const uB = frame.ux * b[0] + frame.uy * b[1]
-  if (!clip(uA, uB, frame.framePlaneDist, 1e12)) return null
+  if (!clip(uA, uB, frame.cutPlaneDist, 1e12)) return null
   return s1 - s0 > 1e-9 ? [s0, s1] : null
 }
 
@@ -199,7 +210,7 @@ function insidePoint(frame: DoorFrame, p: Vec3): boolean {
   const t = -frame.uy * p[0] + frame.ux * p[1]
   const z = p[2] - frame.z0
   const u = frame.ux * p[0] + frame.uy * p[1]
-  return Math.abs(t) <= frame.halfWidth && z <= frame.height && u >= frame.framePlaneDist
+  return Math.abs(t) <= frame.halfWidth && z <= frame.height && u >= frame.cutPlaneDist
 }
 
 const lerp3 = (a: Vec3, b: Vec3, s: number): Vec3 => [
@@ -304,6 +315,22 @@ function profileArea(profile: [number, number][], cap: number): number {
   return area
 }
 
+/** Merge consecutive collinear points so facet segments stay whole. */
+function mergeCollinear(pts: [number, number][]): [number, number][] {
+  if (pts.length <= 2) return pts
+  const out: [number, number][] = [pts[0]]
+  for (let i = 1; i < pts.length - 1; i++) {
+    const [ax, ay] = out[out.length - 1]
+    const [bx, by] = pts[i]
+    const [cx, cy] = pts[i + 1]
+    const cross = (bx - ax) * (cy - ay) - (by - ay) * (cx - ax)
+    const scale = Math.hypot(cx - ax, cy - ay) || 1
+    if (Math.abs(cross) / scale > 1e-3) out.push(pts[i])
+  }
+  out.push(pts[pts.length - 1])
+  return out
+}
+
 /** Linear interpolation on a profile. */
 function profileAt(profile: [number, number][], x: number): number {
   if (profile.length === 0) return 0
@@ -354,16 +381,17 @@ export function cutDoorways(
     const fits = fitSq > 0
     // Auto fit puts the buck corners on the sphere. Positive extra depth
     // recesses the buck (clamped clear of the dome center); negative pushes
-    // it outward, up to the base ring.
-    const framePlaneDist = fits
-      ? Math.min(Math.max(Math.sqrt(fitSq) - extraDepth, rBase * 0.15), rBase)
-      : 0
+    // it outward — past the base ring the entry becomes a projecting
+    // vestibule, sealed by the same closure rules.
+    const framePlaneDist = fits ? Math.max(Math.sqrt(fitSq) - extraDepth, rBase * 0.15) : 0
 
     const halfEnv = halfBuck + margin
     const envHeight = spec.height + margin
     const zTopEnv = z0 + envHeight
 
-    // ---- Faceted closure profiles from the actual shell ----
+    // ---- Faceted closure from the actual shell. The closure seals the
+    // region BETWEEN the shell section and the buck plane: outside the buck
+    // for a recessed entry, outside the shell for a projecting one. ----
     let closureProfile: ClosureProfile | null = null
     let closureSideArea = 0
     let closureTopArea = 0
@@ -372,22 +400,24 @@ export function cutDoorways(
       const tris = localTriangles(model, radius, ux, uy)
       const wallFor = (side: -1 | 1): [number, number][] => {
         const segs = sectionSegments(tris, 1, side * halfEnv, 0, 2).filter(
-          ([u1, , u2]) => Math.max(u1, u2) > framePlaneDist - 1e-6,
+          ([u1, , u2]) => Math.max(u1, u2) > 0,
         )
-        const uMaxSeg = segs.reduce((m, s) => Math.max(m, s[0], s[2]), framePlaneDist)
-        const raw = upperEnvelope(segs, framePlaneDist, uMaxSeg, 8)
-        // Heights above the base plane, clamped to the envelope top; walk
-        // out until the shell meets the base.
+        const uShellMax = segs.reduce((m, s) => Math.max(m, s[0], s[2]), 0)
+        const lo = Math.min(framePlaneDist, uShellMax)
+        const hi = Math.max(framePlaneDist, uShellMax)
+        const raw = upperEnvelope(segs, lo, hi, 12)
+        // Shell height above the base, clamped to [0, envelope top]; beyond
+        // the shell's reach the height is 0 (open air).
         const pts: [number, number][] = []
-        for (const [u, zAbs] of raw) {
-          const h = Math.min(zAbs - z0, envHeight)
-          if (h <= 1e-6 && pts.length > 0) {
-            // Interpolate the exact base landing and stop.
-            const [pu, ph] = pts[pts.length - 1]
-            if (ph > 1e-6) pts.push([pu + ((u - pu) * ph) / (ph - h || 1), 0])
-            break
-          }
-          pts.push([u, Math.max(0, h)])
+        const clampH = (u: number, zAbs: number) =>
+          u > uShellMax - 1e-9 ? 0 : Math.min(Math.max(zAbs - z0, 0), envHeight)
+        for (const [u, zAbs] of raw) pts.push([u, clampH(u, zAbs)])
+        if (pts.length === 0 || pts[0][0] > lo + 1e-6) pts.unshift([lo, envHeight])
+        if (pts[pts.length - 1][0] < hi - 1e-6) pts.push([hi, 0])
+        // Ensure a breakpoint exactly at the buck plane (render rule splits there).
+        if (!pts.some(([u]) => Math.abs(u - framePlaneDist) < 1e-6)) {
+          pts.push([framePlaneDist, Math.min(Math.max(profileAt(pts, framePlaneDist), 0), envHeight)])
+          pts.sort((p, q) => p[0] - q[0])
         }
         return pts
       }
@@ -395,17 +425,25 @@ export function cutDoorways(
       const wallNeg = wallFor(-1)
 
       const topSegs = sectionSegments(tris, 2, zTopEnv, 1, 0).filter(
-        ([, u1, , u2]) => Math.max(u1, u2) > framePlaneDist - 1e-6,
+        ([, u1, , u2]) => Math.max(u1, u2) > 0,
       )
+      // Raw shell radial distance at the roof plane (may sit inside OR
+      // outside the buck plane); 0 where the roof clears the shell entirely.
       const top = upperEnvelope(topSegs, -halfEnv, halfEnv, 12).map(
-        ([t, u]) => [t, Math.max(u, framePlaneDist)] as [number, number],
+        ([t, u]) => [t, Math.max(u, 0)] as [number, number],
       )
 
       closureProfile = { halfWidth: halfEnv, topHeight: envHeight, wallPos, wallNeg, top }
+
+      // Wall region height at u: recessed side (u ≥ buck plane) spans base
+      // to shell; projecting side (u ≤ buck plane) spans shell to roof.
+      const regionProfile = (wall: [number, number][]): [number, number][] =>
+        wall.map(([u, h]) => [u, u >= framePlaneDist - 1e-9 ? h : envHeight - h])
       closureSideArea =
-        profileArea(wallPos, envHeight) + profileArea(wallNeg, envHeight)
+        profileArea(regionProfile(wallPos), envHeight) +
+        profileArea(regionProfile(wallNeg), envHeight)
       closureTopArea = profileArea(
-        top.map(([t, u]) => [t, u - framePlaneDist] as [number, number]),
+        top.map(([t, u]) => [t, Math.abs(u - framePlaneDist)] as [number, number]),
         1e9,
       )
 
@@ -417,26 +455,142 @@ export function cutDoorways(
           [-1, wallNeg],
         ] as const) {
           if (wall.length < 2) continue
-          const uEnd = wall[wall.length - 1][0]
-          const plateLen = uEnd - framePlaneDist
-          if (plateLen >= opts.minStubLength) {
+          // Ground plate spans from the buck plane to where the shell meets
+          // the base (whichever side of the buck that is).
+          let uZero = wall[wall.length - 1][0]
+          for (let i = 1; i < wall.length; i++) {
+            const [u0, h0] = wall[i - 1]
+            const [u1, h1] = wall[i]
+            if (h0 > 1e-6 && h1 <= 1e-6) {
+              uZero = u0 + ((u1 - u0) * h0) / (h0 - h1 || 1)
+              break
+            }
+          }
+          const plateA = Math.min(framePlaneDist, uZero)
+          const plateB = Math.max(framePlaneDist, uZero)
+          if (plateB - plateA >= opts.minStubLength) {
             closureFraming.push({
-              part: 'wall plate', length: plateLen, quantity: 1, at: framePlaneDist, side,
+              part: 'wall plate',
+              length: plateB - plateA,
+              quantity: 1,
+              side,
+              a: [plateA, 0],
+              b: [plateB, 0],
             })
           }
-          for (let u = framePlaneDist + spacing; u < uEnd; u += spacing) {
-            const studLen = profileAt(wall, u)
-            if (studLen < opts.minStubLength) break
-            closureFraming.push({ part: 'wall stud', length: studLen, quantity: 1, at: u, side })
+          // Studs march outward from the buck plane in both directions.
+          const uLo = wall[0][0]
+          const uHi = wall[wall.length - 1][0]
+          for (const dir of [1, -1]) {
+            for (let u = framePlaneDist + dir * spacing; u > uLo && u < uHi; u += dir * spacing) {
+              const h = Math.min(Math.max(profileAt(wall, u), 0), envHeight)
+              const [zA, zB] = u >= framePlaneDist ? [0, h] : [h, envHeight]
+              if (zB - zA < opts.minStubLength) continue
+              closureFraming.push({
+                part: 'wall stud',
+                length: zB - zA,
+                quantity: 1,
+                side,
+                a: [u, zA],
+                b: [u, zB],
+              })
+            }
+          }
+          // Shell-edge members: the closure boundary follows the faceted
+          // shell — one member per facet segment, chained end-to-end so the
+          // frame connects. Sub-minimum slivers merge into their neighbor.
+          const merged = mergeCollinear(wall)
+          const runs: [number, number][][] = []
+          let run: [number, number][] = []
+          for (let i = 1; i < merged.length; i++) {
+            const h0 = merged[i - 1][1]
+            const h1 = merged[i][1]
+            const flat0 = h0 <= 1e-6 && h1 <= 1e-6
+            const flatTop = h0 >= envHeight - 1e-6 && h1 >= envHeight - 1e-6
+            if (flat0 || flatTop) {
+              if (run.length > 1) runs.push(run)
+              run = []
+            } else {
+              if (run.length === 0) run.push(merged[i - 1])
+              run.push(merged[i])
+            }
+          }
+          if (run.length > 1) runs.push(run)
+          for (const pts of runs) {
+            let start = pts[0]
+            for (let j = 1; j < pts.length; j++) {
+              const len = Math.hypot(pts[j][0] - start[0], pts[j][1] - start[1])
+              const isLast = j === pts.length - 1
+              if (len >= opts.minStubLength || (isLast && len > 1e-6)) {
+                const prev = closureFraming[closureFraming.length - 1]
+                if (isLast && len < opts.minStubLength && prev?.part === 'shell edge' && prev.side === side) {
+                  // Fold the trailing sliver into the previous member.
+                  prev.b = pts[j]
+                  prev.length = Math.hypot(prev.b[0] - prev.a[0], prev.b[1] - prev.a[1])
+                } else {
+                  closureFraming.push({
+                    part: 'shell edge',
+                    length: len,
+                    quantity: 1,
+                    side,
+                    a: start,
+                    b: pts[j],
+                  })
+                }
+                start = pts[j]
+              }
+            }
           }
         }
+        // Top blocking between the roof-plane shell crossing and the buck.
         for (let t = -halfEnv + spacing; t < halfEnv - 1e-9; t += spacing) {
-          const len = profileAt(top, t) - framePlaneDist
-          if (len >= opts.minStubLength) {
-            closureFraming.push({ part: 'top blocking', length: len, quantity: 1, at: t, side: 0 })
+          const uShell = profileAt(top, t)
+          const len = Math.abs(uShell - framePlaneDist)
+          if (len >= opts.minStubLength && uShell > 1e-6) {
+            closureFraming.push({
+              part: 'top blocking',
+              length: len,
+              quantity: 1,
+              side: 0,
+              a: [t, Math.min(uShell, framePlaneDist)],
+              b: [t, Math.max(uShell, framePlaneDist)],
+            })
           }
+        }
+        // Top-edge members along the roof-plane shell crossing.
+        const mergedTop = mergeCollinear(top)
+        for (let i = 1; i < mergedTop.length; i++) {
+          const [t0, u0] = mergedTop[i - 1]
+          const [t1, u1] = mergedTop[i]
+          if (u0 <= 1e-6 && u1 <= 1e-6) continue
+          if (Math.max(Math.abs(u0 - framePlaneDist), Math.abs(u1 - framePlaneDist)) < opts.minStubLength) continue
+          const len = Math.hypot(t1 - t0, u1 - u0)
+          if (len < opts.minStubLength) continue
+          closureFraming.push({
+            part: 'top edge',
+            length: len,
+            quantity: 1,
+            side: 0,
+            a: [t0, u0],
+            b: [t1, u1],
+          })
         }
       }
+    }
+
+    // Unique framing junctions (member ends + the four buck corners).
+    const joints = new Set<string>()
+    const jkey = (plane: number, x: number, y: number) =>
+      `${plane}:${Math.round(x * 2)}:${Math.round(y * 2)}`
+    for (const m of closureFraming) {
+      joints.add(jkey(m.side, m.a[0], m.a[1]))
+      joints.add(jkey(m.side, m.b[0], m.b[1]))
+    }
+    if (fits) {
+      joints.add(jkey(9, -halfBuck, 0))
+      joints.add(jkey(9, halfBuck, 0))
+      joints.add(jkey(9, -halfBuck, spec.height))
+      joints.add(jkey(9, halfBuck, spec.height))
     }
 
     perDoor.set(spec.id, {
@@ -444,7 +598,7 @@ export function cutDoorways(
       jambLength: spec.height,
       headerLength: spec.width,
       framePlaneDist,
-      tunnelDepth: Math.max(0, rBase - framePlaneDist),
+      tunnelDepth: rBase - framePlaneDist,
       fits,
       removedStrutCount: 0,
       trimmedStrutCount: 0,
@@ -455,6 +609,7 @@ export function cutDoorways(
       closureTopArea,
       closureFaceArea: fits ? 2 * halfEnv * envHeight - spec.width * spec.height : 0,
       closureFraming,
+      closureJointCount: joints.size,
       closureProfile,
     })
 
@@ -465,7 +620,7 @@ export function cutDoorways(
       z0,
       halfWidth: halfEnv,
       height: envHeight,
-      framePlaneDist,
+      cutPlaneDist: fits ? Math.min(framePlaneDist, Math.sqrt(fitSq)) : framePlaneDist,
     })
   }
 
@@ -575,7 +730,9 @@ export function cutDoorways(
 
 /** Score a single door placement: lower = cleaner. Hubs inside the passage
  * are the worst offense; trims and distinct custom lengths are the mess a
- * builder feels; removing whole struts is largely what a door SHOULD do. */
+ * builder feels; removing whole struts is largely what a door SHOULD do.
+ * A centering term biases the door toward sitting symmetrically on a hub
+ * or a strut midline — the visually appealing placements. */
 function placementStats(
   model: DomeModel,
   spec: DoorSpec,
@@ -589,12 +746,48 @@ function placementStats(
   )
   const shortLimit = opts.minStubLength * 2
   const shortPieces = cut.trimmed.filter((t) => t.length < shortLimit).length
+
+  // How far the door's center plane is from the nearest hub or strut
+  // midpoint in the zone above/around the opening.
+  const az = (spec.azimuthDeg * Math.PI) / 180
+  const ux = Math.cos(az)
+  const uy = Math.sin(az)
+  const z0 = model.cutZ * radius
+  const inZone = (x: number, y: number, z: number) => {
+    const u = ux * x + uy * y
+    const t = -uy * x + ux * y
+    const h = z - z0
+    return u > radius * 0.4 && h >= -1e-6 && h <= spec.height * 1.25 && Math.abs(t) <= spec.width
+      ? Math.abs(t)
+      : Infinity
+  }
+  let centerOffset = spec.width / 2
+  for (const v of model.vertices) {
+    centerOffset = Math.min(
+      centerOffset,
+      inZone(v.position[0] * radius, v.position[1] * radius, v.position[2] * radius),
+    )
+  }
+  for (const e of model.edges) {
+    const p0 = model.vertices[e.v0].position
+    const p1 = model.vertices[e.v1].position
+    centerOffset = Math.min(
+      centerOffset,
+      inZone(
+        ((p0[0] + p1[0]) / 2) * radius,
+        ((p0[1] + p1[1]) / 2) * radius,
+        ((p0[2] + p1[2]) / 2) * radius,
+      ),
+    )
+  }
+
   const stats: PlacementStats = {
     trimmed: info.trimmedStrutCount,
     removed: info.removedStrutCount,
     hubsRemoved: info.removedHubCount,
     distinctTrims: distinct.size,
     shortPieces,
+    centerOffset,
     score: 0,
   }
   stats.score =
@@ -602,7 +795,8 @@ function placementStats(
     stats.trimmed * 3 +
     stats.distinctTrims * 2 +
     stats.shortPieces * 2 +
-    stats.removed * 0.25
+    stats.removed * 0.25 +
+    (centerOffset / (spec.width / 2)) * 5
   return stats
 }
 

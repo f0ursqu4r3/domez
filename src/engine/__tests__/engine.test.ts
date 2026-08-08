@@ -7,6 +7,7 @@ import { packCuts } from '../packing'
 import { optimizeDiameter } from '../optimize'
 import { analyzeOpenings } from '../openings'
 import { cutDoorways, optimizeDoorPlacement } from '../doorway'
+import { planPanels } from '../panels'
 import { formatFeetInches, formatInchesFractional, roundToIncrement } from '../units'
 import { cross, dot, sub, add, length } from '../vec'
 
@@ -338,7 +339,7 @@ describe('parametric doorways', () => {
     // Studs shorten (never grow) marching out along the faceted shell edge.
     for (let i = 1; i < studs.length; i++) {
       expect(studs[i].length).toBeLessThanOrEqual(studs[i - 1].length + 1e-6)
-      expect(studs[i].at - studs[i - 1].at).toBeCloseTo(16, 9)
+      expect(studs[i].a[0] - studs[i - 1].a[0]).toBeCloseTo(16, 9)
     }
     for (const m of big.doors[0].closureFraming) expect(m.length).toBeGreaterThanOrEqual(6)
 
@@ -395,6 +396,63 @@ describe('parametric doorways', () => {
         expect(onBoundary).toBeLessThan(1e-6)
       }
     }
+  })
+
+  it('negative depth can project the entry past the base ring', () => {
+    const rBase = Math.sqrt(R * R - (dome.cutZ * R) ** 2)
+    const out = cutDoorways(dome, [{ ...door, extraDepth: -40 }], R, {
+      minStubLength: 6,
+      studSpacing: 16,
+    }).doors[0]
+    expect(out.framePlaneDist).toBeGreaterThan(rBase)
+    expect(out.tunnelDepth).toBeLessThan(0)
+    // The projecting vestibule still gets sealed: walls + roof + framing.
+    expect(out.closureSideArea).toBeGreaterThan(0)
+    expect(out.closureFraming.length).toBeGreaterThan(0)
+    // Projecting-side studs run from the shell up to the roof.
+    const protruding = out.closureFraming.filter(
+      (m) => m.part === 'wall stud' && m.a[0] < out.framePlaneDist,
+    )
+    expect(protruding.length).toBeGreaterThan(0)
+    for (const s of protruding) expect(s.b[1]).toBeCloseTo(80, 6)
+  })
+
+  it('emits connected shell-edge members along the faceted closure boundary', () => {
+    const framed = cutDoorways(dome, [{ ...door, extraDepth: 12 }], R, {
+      minStubLength: 6,
+      studSpacing: 16,
+    }).doors[0]
+    const edges = framed.closureFraming.filter((m) => m.part === 'shell edge')
+    expect(edges.length).toBeGreaterThan(0)
+    // Edge members chain: within a run, consecutive members share endpoints
+    // exactly (separate runs sit farther apart than the scrap floor).
+    for (const side of [1, -1] as const) {
+      const chain = edges.filter((m) => m.side === side)
+      for (let i = 1; i < chain.length; i++) {
+        const gap = Math.hypot(
+          chain[i].a[0] - chain[i - 1].b[0],
+          chain[i].a[1] - chain[i - 1].b[1],
+        )
+        expect(gap < 1e-6 || gap >= 6).toBe(true)
+      }
+    }
+    expect(framed.closureJointCount).toBeGreaterThan(4)
+    // Edge members reach the cut list.
+    const cl = buildCutList(
+      dome,
+      { radius: R, increment: 1 / 8, endOffset: 1.5, units: 'imperial' },
+      cutDoorways(dome, [{ ...door, extraDepth: 12 }], R, { minStubLength: 6, studSpacing: 16 }),
+    )
+    expect(cl.rows.some((r) => r.label === 'D1 shell edge')).toBe(true)
+  })
+
+  it('placement optimizer biases toward centering on a hub or strut midline', () => {
+    const spec = { id: 'D1', azimuthDeg: 10, width: 36, height: 80 }
+    const result = optimizeDoorPlacement(dome, spec, R, { minStubLength: 6, increment: 1 / 8 })
+    // The chosen bearing is visually centered: the center plane passes
+    // within a couple of inches of a hub or strut midline.
+    expect(result.after.centerOffset).toBeLessThanOrEqual(result.before.centerOffset + 1e-9)
+    expect(result.after.centerOffset).toBeLessThan(4)
   })
 
   it('depth recesses the buck (and negative depth pushes it outward)', () => {
@@ -508,6 +566,43 @@ describe('parametric doorways', () => {
     )
     expect(withEmpty.rows).toEqual(base.rows)
     expect(withEmpty.totalStruts).toBe(base.totalStruts)
+  })
+})
+
+describe('panel sheet planning', () => {
+  const dome = generateDome({ frequency: 5, fraction: '5/8' })
+
+  it('groups faces into panel types matching the strut-type structure', () => {
+    const plan = planPanels(dome, 156, { sheetW: 48, sheetL: 96, sheetLabel: '4×8', skinFactor: 1 })
+    expect(plan.totalPanels).toBe(dome.faces.length)
+    expect(plan.types.reduce((n, t) => n + t.count, 0)).toBe(dome.faces.length)
+    expect(plan.types.length).toBeGreaterThan(2)
+    expect(plan.totalSheets).toBeGreaterThan(0)
+    for (const t of plan.types) {
+      expect(t.area).toBeGreaterThan(0)
+      expect(t.seamed ? t.sheets > 0 : t.perSheet > 0).toBe(true)
+    }
+    expect(plan.wasteFraction).toBeGreaterThanOrEqual(0)
+    expect(plan.wasteFraction).toBeLessThan(1)
+  })
+
+  it('both skins double the panel count; exclusions reduce it', () => {
+    const single = planPanels(dome, 156, { sheetW: 48, sheetL: 96, sheetLabel: '4×8', skinFactor: 1 })
+    const both = planPanels(dome, 156, { sheetW: 48, sheetL: 96, sheetLabel: '4×8', skinFactor: 2 })
+    expect(both.totalPanels).toBe(single.totalPanels * 2)
+    expect(both.totalSheets).toBeGreaterThanOrEqual(single.totalSheets)
+    const excluded = planPanels(dome, 156, {
+      sheetW: 48, sheetL: 96, sheetLabel: '4×8', skinFactor: 1,
+      excludeFaceIds: new Set([0, 1, 2]),
+    })
+    expect(excluded.totalPanels).toBe(single.totalPanels - 3)
+  })
+
+  it('flags 3V-size panels as seamed when they exceed one sheet', () => {
+    const big = generateDome({ frequency: 3, fraction: '5/8' })
+    const plan = planPanels(big, 156, { sheetW: 48, sheetL: 96, sheetLabel: '4×8', skinFactor: 1 })
+    // 26 ft 3V panels have ~61" edges — none fit a 4×8 sheet whole.
+    expect(plan.types.some((t) => t.seamed)).toBe(true)
   })
 })
 

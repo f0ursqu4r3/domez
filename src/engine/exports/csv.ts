@@ -1,5 +1,6 @@
 import type { CutList } from '../cutlist'
 import type { DoorFrameInfo } from '../doorway'
+import type { PanelPlan } from '../panels'
 import type { PackingResult } from '../packing'
 import type { OpeningGroup } from '../openings'
 import type { DomeModel, UnitSystem } from '../types'
@@ -112,6 +113,41 @@ export function openingsCsv(
       ),
     )
   }
+  return lines.join('\n')
+}
+
+export function panelsCsv(plan: PanelPlan, units: UnitSystem): string {
+  const unit = units === 'imperial' ? 'in' : 'mm'
+  const areaUnit = units === 'imperial' ? 'ft2' : 'm2'
+  const areaOf = (a: number) => (units === 'imperial' ? a / 144 : a / 1e6)
+  const lines = [
+    row(
+      'Panel',
+      `Qty${plan.skinFactor === 2 ? ' (both skins)' : ''}`,
+      `Edges (${unit})`,
+      `Area (${areaUnit})`,
+      `Per ${plan.sheetLabel}`,
+      'Sheets',
+      'Notes',
+    ),
+  ]
+  for (const t of plan.types) {
+    lines.push(
+      row(
+        t.label,
+        t.count,
+        t.edges.map((e) => e.toFixed(2)).join(' / '),
+        areaOf(t.area).toFixed(2),
+        t.seamed ? '—' : t.perSheet,
+        t.sheets,
+        t.seamed ? 'too large for one sheet — seam from pieces' : 'two per nested rectangle',
+      ),
+    )
+  }
+  lines.push('')
+  lines.push(row('Total panels', plan.totalPanels))
+  lines.push(row(`Total sheets (${plan.sheetLabel})`, plan.totalSheets))
+  lines.push(row('Sheet waste', `${(plan.wasteFraction * 100).toFixed(1)}%`))
   return lines.join('\n')
 }
 

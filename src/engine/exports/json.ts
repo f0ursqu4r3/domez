@@ -18,6 +18,8 @@ export interface ProjectSettings {
   openings?: Record<string, string>
   /** Parametric doorways, canonical mm. depthMm is signed recess. */
   doors?: { azimuthDeg: number; widthMm: number; heightMm: number; depthMm?: number; marginMm?: number }[]
+  /** Skin panel mounting: outside | inside | both. */
+  panelPlacement?: string
 }
 
 /** Round-trippable project file: settings drive the app; derived data is

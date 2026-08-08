@@ -11,6 +11,7 @@ import { planPanels } from '../panels'
 import { buildRiser, orderedBaseRing } from '../riser'
 import { projectJson, parseProjectJson } from '../exports/json'
 import { miterCsv } from '../exports/csv'
+import { cutTemplatesSvg, boardDiagramsSvg } from '../exports/templates'
 import { generateZome } from '../zome'
 import { hubAxes } from '../hubs'
 import { miterCuts } from '../miter'
@@ -1357,5 +1358,92 @@ describe('mitered joint method', () => {
         expect(deg).toBeLessThanOrEqual(90)
       }
     }
+  })
+})
+
+describe('fabrication drawings', () => {
+  const model = generateDome({ frequency: 3, fraction: '1/2', baseMode: 'leveled' })
+  const cl = buildCutList(model, {
+    radius: 150,
+    increment: 1 / 8,
+    endOffset: 1.5,
+    units: 'imperial',
+  })
+  const rectSection = { kind: 'rect' as const, width: 1.5, depth: 3.5 }
+
+  it('templates print at true scale with a calibration ruler', () => {
+    const svg = cutTemplatesSvg(model, cl, {
+      units: 'imperial',
+      jointId: 'timber-plate',
+      endOffset: 1.5,
+      radius: 150,
+      section: rectSection,
+      title: 'test',
+    })
+    expect(svg).toContain('width="8.5in"')
+    expect(svg).toContain('data-cal-length="3"')
+    // One page per strut type for timber-plate (constant axial bevel per type).
+    const pages = svg.match(/data-template-page/g) ?? []
+    expect(pages.length).toBe(model.strutTypes.length)
+    const metric = cutTemplatesSvg(model, cl, {
+      units: 'metric',
+      jointId: 'timber-plate',
+      endOffset: 38,
+      radius: 3810,
+      section: { kind: 'rect', width: 38, depth: 89 },
+      title: 'test',
+    })
+    expect(metric).toContain('width="210mm"')
+    expect(metric).toContain('data-cal-length="75"')
+  })
+
+  it('mitered templates group end signatures; pipe pages mark hole centers', () => {
+    const z = generateZome({ sides: 8, pitchDeg: 45, rows: 4, baseMode: 'leveled' })
+    const zcl = buildCutList(z, { radius: 130, increment: 1 / 8, endOffset: 0, units: 'imperial' })
+    const svg = cutTemplatesSvg(z, zcl, {
+      units: 'imperial',
+      jointId: 'mitered',
+      endOffset: 0,
+      radius: 130,
+      section: rectSection,
+      title: 'test',
+    })
+    const pages = svg.match(/data-template-page/g) ?? []
+    expect(pages.length).toBeGreaterThan(z.strutTypes.length)
+    expect(svg).toContain('blade tilt')
+    const pipe = cutTemplatesSvg(model, cl, {
+      units: 'imperial',
+      jointId: 'flattened-pipe',
+      endOffset: 0,
+      radius: 150,
+      section: { kind: 'round', diameter: 0.92 },
+      title: 'test',
+    })
+    expect(pipe).toContain('data-hole-center')
+  })
+
+  it('board diagrams draw every board with kerf ticks and waste', () => {
+    const packing = packCuts(cl, {
+      kerf: 0.125,
+      stock: [
+        { length: 96, label: '8 ft' },
+        { length: 144, label: '12 ft' },
+      ],
+    })
+    const svg = boardDiagramsSvg(packing, { units: 'imperial', title: 'test', kerf: 0.125 })
+    const bars = svg.match(/data-board=/g) ?? []
+    expect(bars.length).toBe(packing.boards.length)
+    const ticks = svg.match(/data-kerf-tick/g) ?? []
+    expect(ticks.length).toBe(
+      packing.boards.reduce((n, b) => n + Math.max(0, b.cuts.length - 1), 0),
+    )
+    expect(svg).toContain('waste')
+    for (const g of packing.boardCounts) expect(svg).toContain(g.stockLabel)
+    const empty = boardDiagramsSvg(packCuts(cl, { kerf: 0, stock: [] }), {
+      units: 'imperial',
+      title: 'empty',
+      kerf: 0,
+    })
+    expect(empty).toContain('<svg')
   })
 })

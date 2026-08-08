@@ -557,6 +557,60 @@ describe('parametric doorways', () => {
     expect(delta).toBeGreaterThan(13)
   })
 
+  it('framed windows: sill-height opening with sill buck, bottom apron, and localized cut', () => {
+    const win = { id: 'W1', azimuthDeg: 0, width: 36, height: 36, sillHeight: 40 }
+    const cut = cutDoorways(dome, [win], R, { minStubLength: 6, studSpacing: 16 })
+    const info = cut.doors[0]
+    expect(info.fits).toBe(true)
+    // The cut stays in the window band: nothing removed at the base ring.
+    const z0 = dome.cutZ * R
+    for (const eid of [...cut.removedEdges, ...cut.trimmedEdges]) {
+      const e = dome.edges[eid]
+      const zMax = Math.max(dome.vertices[e.v0].position[2], dome.vertices[e.v1].position[2]) * R
+      // At least part of the strut reaches the window band.
+      expect(zMax - z0).toBeGreaterThan(40 - 12)
+    }
+    // Bottom apron exists and the profile carries a bottom polyline.
+    expect(info.closureBottomArea).toBeGreaterThan(0)
+    expect(info.closureProfile!.bottom.length).toBeGreaterThan(0)
+    expect(info.closureProfile!.lowHeight).toBeCloseTo(40, 9)
+    // Cut list gains a sill member alongside jambs and header.
+    const cl = buildCutList(
+      dome,
+      { radius: R, increment: 1 / 8, endOffset: 1.5, units: 'imperial' },
+      cut,
+    )
+    expect(cl.rows.some((r) => r.label === 'W1 sill' && r.roundedCutLength === 36)).toBe(true)
+    expect(cl.rows.some((r) => r.label === 'W1 jamb')).toBe(true)
+    expect(cl.rows.some((r) => r.label === 'W1 header')).toBe(true)
+  })
+
+  it('rejects a window pushed above the shell', () => {
+    const tooHigh = cutDoorways(
+      dome,
+      [{ id: 'W1', azimuthDeg: 0, width: 36, height: 36, sillHeight: 160 }],
+      R,
+      { minStubLength: 6 },
+    )
+    expect(tooHigh.doors[0].fits).toBe(false)
+  })
+
+  it('doors and windows cut together without interfering', () => {
+    const both = cutDoorways(
+      dome,
+      [
+        { id: 'D1', azimuthDeg: 0, width: 36, height: 80 },
+        { id: 'W1', azimuthDeg: 90, width: 36, height: 36, sillHeight: 40 },
+      ],
+      R,
+      { minStubLength: 6, studSpacing: 16 },
+    )
+    expect(both.doors).toHaveLength(2)
+    expect(both.doors[0].id).toBe('D1')
+    expect(both.doors[1].id).toBe('W1')
+    expect(both.doors[1].trimmedStrutCount + both.doors[1].removedStrutCount).toBeGreaterThan(0)
+  })
+
   it('no doors → cut list is unchanged', () => {
     const base = buildCutList(dome, { radius: R, increment: 1 / 8, endOffset: 1.5, units: 'imperial' })
     const withEmpty = buildCutList(

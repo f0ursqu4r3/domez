@@ -5,8 +5,17 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { useDomeProject } from '@/composables/useDomeProject'
 import { buildDomeGroup, type DomePickMaps } from '@/lib/three-builders'
 
-const { state, model, radius, strutSectionWorking, openingGroups, paintFace, addDoorAt, doorway } =
-  useDomeProject()
+const {
+  state,
+  model,
+  radius,
+  strutSectionWorking,
+  openingGroups,
+  paintFace,
+  addDoorAt,
+  addWindowAt,
+  doorway,
+} = useDomeProject()
 
 const container = ref<HTMLDivElement | null>(null)
 let renderer: THREE.WebGLRenderer | null = null
@@ -117,14 +126,21 @@ function onPointerUp(ev: PointerEvent) {
   raycaster.setFromCamera(pointer, camera)
   const pick = domeGroup.userData.pick as DomePickMaps
 
-  // Door tool: place a parametric doorway at the clicked azimuth.
-  if (state.openingTool === 'door') {
+  // Door/window tools: place a parametric opening at the clicked spot.
+  if (state.openingTool === 'door' || state.openingTool === 'window') {
     const targets: THREE.Object3D[] = [...pick.panelMaps.keys(), ...pick.strutMaps.keys()]
     const hit = raycaster.intersectObjects(targets, false)[0]
     if (hit) {
       // three (x, z, -y) -> engine azimuth atan2(y, x) = atan2(-z, x).
       const azimuthDeg = (Math.atan2(-hit.point.z, hit.point.x) * 180) / Math.PI
-      addDoorAt(azimuthDeg)
+      if (state.openingTool === 'door') {
+        addDoorAt(azimuthDeg)
+      } else {
+        // Window centers on the clicked height (three y == engine z).
+        const heightAboveBase = hit.point.y - model.value.cutZ * radius.value
+        const mmPerWorking = state.units === 'imperial' ? 25.4 : 1
+        addWindowAt(azimuthDeg, heightAboveBase * mmPerWorking)
+      }
     }
     return
   }

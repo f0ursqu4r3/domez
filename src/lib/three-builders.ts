@@ -200,20 +200,28 @@ export function buildDomeGroup(
       }
       const base = u.clone().multiplyScalar(door.framePlaneDist)
       const half = door.width / 2
-      // Jambs at ±width/2, from the base plane up to the header.
+      // Jambs at ±width/2, spanning sill to header (sill = 0 for doors).
+      const sillH = door.sillHeight ?? 0
       addMember(
-        base.clone().addScaledVector(tv, half).setY(z0 + door.height / 2),
+        base.clone().addScaledVector(tv, half).setY(z0 + sillH + door.height / 2),
         memberW, door.height, memberD,
       )
       addMember(
-        base.clone().addScaledVector(tv, -half).setY(z0 + door.height / 2),
+        base.clone().addScaledVector(tv, -half).setY(z0 + sillH + door.height / 2),
         memberW, door.height, memberD,
       )
       // Header across the top, spanning the rough opening plus both jambs.
       addMember(
-        base.clone().setY(z0 + door.height + memberW / 2),
+        base.clone().setY(z0 + sillH + door.height + memberW / 2),
         door.width + 2 * memberW, memberW, memberD,
       )
+      // Window sill member under the opening.
+      if (sillH > 0) {
+        addMember(
+          base.clone().setY(z0 + sillH - memberW / 2),
+          door.width + 2 * memberW, memberW, memberD,
+        )
+      }
 
       // ---- Extruded-entry closure, following the faceted shell ----
       const profile = door.closureProfile
@@ -228,8 +236,10 @@ export function buildDomeGroup(
           positions.push(a.x, a.y, a.z, c.x, c.y, c.z, d.x, d.y, d.z)
         }
         // Side walls: seal between the faceted shell and the buck plane —
-        // recessed side (u ≥ buck) from base to shell, projecting side
-        // (u ≤ buck) from shell up to the roof.
+        // recessed side (u ≥ buck) from the band floor to the shell,
+        // projecting side (u ≤ buck) from the shell up to the band top.
+        const zLo = profile.lowHeight
+        const zHi = profile.topHeight
         for (const [side, wall] of [
           [1, profile.wallPos],
           [-1, profile.wallNeg],
@@ -240,41 +250,47 @@ export function buildDomeGroup(
             const [u1, h1] = wall[i]
             const mid = (u0 + u1) / 2
             if (mid >= door.framePlaneDist) {
-              if (h0 <= 1e-6 && h1 <= 1e-6) continue
-              quad(P(u0, t, 0), P(u0, t, h0), P(u1, t, h1), P(u1, t, 0))
+              if (h0 <= zLo + 1e-6 && h1 <= zLo + 1e-6) continue
+              quad(P(u0, t, zLo), P(u0, t, h0), P(u1, t, h1), P(u1, t, zLo))
             } else {
-              if (h0 >= profile.topHeight - 1e-6 && h1 >= profile.topHeight - 1e-6) continue
-              quad(
-                P(u0, t, h0),
-                P(u0, t, profile.topHeight),
-                P(u1, t, profile.topHeight),
-                P(u1, t, h1),
-              )
+              if (h0 >= zHi - 1e-6 && h1 >= zHi - 1e-6) continue
+              quad(P(u0, t, h0), P(u0, t, zHi), P(u1, t, zHi), P(u1, t, h1))
             }
           }
         }
-        // Top plane: between the roof-plane shell crossing and the buck.
-        for (let i = 1; i < profile.top.length; i++) {
-          const [t0, u0] = profile.top[i - 1]
-          const [t1, u1] = profile.top[i]
-          if (
-            Math.abs(u0 - door.framePlaneDist) <= 1e-6 &&
-            Math.abs(u1 - door.framePlaneDist) <= 1e-6
-          )
-            continue
-          quad(
-            P(door.framePlaneDist, t0, profile.topHeight),
-            P(Math.max(u0, 1e-3), t0, profile.topHeight),
-            P(Math.max(u1, 1e-3), t1, profile.topHeight),
-            P(door.framePlaneDist, t1, profile.topHeight),
-          )
+        // Horizontal planes: roof, and the sill apron for windows.
+        const planeStrips = (planeProfile: [number, number][], h: number) => {
+          for (let i = 1; i < planeProfile.length; i++) {
+            const [t0, u0] = planeProfile[i - 1]
+            const [t1, u1] = planeProfile[i]
+            if (
+              Math.abs(u0 - door.framePlaneDist) <= 1e-6 &&
+              Math.abs(u1 - door.framePlaneDist) <= 1e-6
+            )
+              continue
+            quad(
+              P(door.framePlaneDist, t0, h),
+              P(Math.max(u0, 1e-3), t0, h),
+              P(Math.max(u1, 1e-3), t1, h),
+              P(door.framePlaneDist, t1, h),
+            )
+          }
         }
+        planeStrips(profile.top, zHi)
+        if (profile.bottom.length > 0) planeStrips(profile.bottom, zLo)
         // Face band at the buck plane (margin zone around the rough opening).
-        if (halfEnv - half > 1e-6 || profile.topHeight - door.height > 1e-6) {
+        const buckLo = sillH
+        const buckHi = sillH + door.height
+        if (halfEnv - half > 1e-6 || zHi - buckHi > 1e-6 || buckLo - zLo > 1e-6) {
           const d = door.framePlaneDist
-          quad(P(d, -halfEnv, 0), P(d, -halfEnv, profile.topHeight), P(d, -half, profile.topHeight), P(d, -half, 0))
-          quad(P(d, half, 0), P(d, half, profile.topHeight), P(d, halfEnv, profile.topHeight), P(d, halfEnv, 0))
-          quad(P(d, -half, door.height), P(d, -half, profile.topHeight), P(d, half, profile.topHeight), P(d, half, door.height))
+          quad(P(d, -halfEnv, zLo), P(d, -halfEnv, zHi), P(d, -half, zHi), P(d, -half, zLo))
+          quad(P(d, half, zLo), P(d, half, zHi), P(d, halfEnv, zHi), P(d, halfEnv, zLo))
+          if (zHi - buckHi > 1e-6) {
+            quad(P(d, -half, buckHi), P(d, -half, zHi), P(d, half, zHi), P(d, half, buckHi))
+          }
+          if (buckLo - zLo > 1e-6) {
+            quad(P(d, -half, zLo), P(d, -half, buckLo), P(d, half, buckLo), P(d, half, zLo))
+          }
         }
         if (positions.length > 0) {
           const closureGeo = new THREE.BufferGeometry()
@@ -301,7 +317,11 @@ export function buildDomeGroup(
         // frame reads as connected sticks.
         const memberWorld = (m: (typeof door.closureFraming)[number], e: [number, number]) =>
           m.side === 0
-            ? P(Math.max(e[1], 1e-3), e[0], profile.topHeight)
+            ? P(
+                Math.max(e[1], 1e-3),
+                e[0],
+                m.part.startsWith('sill') ? profile.lowHeight : profile.topHeight,
+              )
             : P(e[0], m.side * halfEnv, e[1])
         const jointPts: THREE.Vector3[] = []
         const barGeo = new THREE.BoxGeometry(1, 1, 1)
@@ -334,10 +354,10 @@ export function buildDomeGroup(
           jointPts.push(a, b)
         }
         // Buck corners are junctions too.
-        jointPts.push(P(door.framePlaneDist, -half, 0), P(door.framePlaneDist, half, 0))
+        jointPts.push(P(door.framePlaneDist, -half, sillH), P(door.framePlaneDist, half, sillH))
         jointPts.push(
-          P(door.framePlaneDist, -half, door.height),
-          P(door.framePlaneDist, half, door.height),
+          P(door.framePlaneDist, -half, sillH + door.height),
+          P(door.framePlaneDist, half, sillH + door.height),
         )
         // Connector nodes at unique junctions.
         const seen = new Set<string>()

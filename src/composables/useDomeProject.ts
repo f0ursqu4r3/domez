@@ -159,6 +159,15 @@ interface ProjectState {
    * depthMm is signed (negative pushes the buck toward the shell);
    * marginMm is the cut clearance band around the rough opening. */
   doors: { azimuthDeg: number; widthMm: number; heightMm: number; depthMm: number; marginMm: number }[]
+  /** Parametric framed windows: doors with a sill height. Canonical mm. */
+  framedWindows: {
+    azimuthDeg: number
+    sillMm: number
+    widthMm: number
+    heightMm: number
+    depthMm: number
+    marginMm: number
+  }[]
   /** Render the extruded-entry closure sealing the shell back to each buck. */
   closeDoorways: boolean
   /** Which face(s) of the frame the skin panels mount to. 'both' doubles
@@ -197,6 +206,7 @@ const state = reactive<ProjectState>({
   trueSize: false,
   openings: {},
   doors: [],
+  framedWindows: [],
   closeDoorways: true,
   panelPlacement: 'outside',
   openingTool: 'off',
@@ -363,6 +373,23 @@ const doorSpecs = computed<DoorSpec[]>(() => {
   }))
 })
 
+/** Framed window specs in working units, labeled W1, W2, ... */
+const windowSpecs = computed<DoorSpec[]>(() => {
+  const c = (mm: number) => (state.units === 'imperial' ? mm / MM_PER_INCH : mm)
+  return state.framedWindows.map((w, i) => ({
+    id: `W${i + 1}`,
+    azimuthDeg: w.azimuthDeg,
+    width: c(w.widthMm),
+    height: c(w.heightMm),
+    sillHeight: c(w.sillMm),
+    extraDepth: c(w.depthMm),
+    margin: c(w.marginMm),
+  }))
+})
+
+/** Everything the doorway cutter processes: doors + framed windows. */
+const portalSpecs = computed<DoorSpec[]>(() => [...doorSpecs.value, ...windowSpecs.value])
+
 /** Trimmed-piece scrap floor: 6″ / 150 mm. */
 const minStubLength = computed(() => (state.units === 'imperial' ? 6 : 150))
 /** Closure framing stud spacing: 16″ / 400 mm o.c. Zero when the closure
@@ -372,13 +399,17 @@ const studSpacing = computed(() =>
 )
 
 const doorway = computed(() =>
-  state.doors.length === 0
+  portalSpecs.value.length === 0
     ? emptyDoorwayCut()
-    : cutDoorways(model.value, doorSpecs.value, radius.value, {
+    : cutDoorways(model.value, portalSpecs.value, radius.value, {
         minStubLength: minStubLength.value,
         studSpacing: studSpacing.value,
       }),
 )
+
+/** Split doorway results for the UI: D* are doors, W* framed windows. */
+const doorInfos = computed(() => doorway.value.doors.filter((d) => d.id.startsWith('D')))
+const windowInfos = computed(() => doorway.value.doors.filter((d) => d.id.startsWith('W')))
 
 /** Standard sheet-good size for the skin panels. */
 const panelSheet = computed(() =>
@@ -401,9 +432,11 @@ const panelPlan = computed(() => {
   })
 })
 
-/** Paint/erase a panel with the active opening tool (viewer click handler). */
+/** Paint/erase a panel with the active opening tool (viewer click handler).
+ * Doors and framed windows are parametric — only vents (and erase) paint. */
 function paintFace(faceId: number) {
-  if (state.openingTool === 'off' || state.openingTool === 'door') return
+  if (state.openingTool === 'off' || state.openingTool === 'door' || state.openingTool === 'window')
+    return
   if (state.openingTool === 'erase') {
     delete state.openings[faceId]
   } else {
@@ -429,6 +462,26 @@ function removeDoor(index: number) {
   state.doors.splice(index, 1)
 }
 
+/** Place a framed window at an azimuth, sill taken from where the user
+ * clicked (centered on the click point). Default 36″ × 36″. */
+function addWindowAt(azimuthDeg: number, clickHeightMm: number) {
+  const heightMm = 36 * MM_PER_INCH
+  const sillMm = Math.max(12 * MM_PER_INCH, clickHeightMm - heightMm / 2)
+  state.framedWindows.push({
+    azimuthDeg: Math.round(((azimuthDeg % 360) + 360) % 360),
+    sillMm,
+    widthMm: 36 * MM_PER_INCH,
+    heightMm,
+    depthMm: 0,
+    marginMm: 0,
+  })
+  state.openingTool = 'off'
+}
+
+function removeWindow(index: number) {
+  state.framedWindows.splice(index, 1)
+}
+
 /** Snap a door to the nearest bearing where the passage meets the frame
  * cleanly (fewest hubs in the opening, fewest and least-fussy trims). */
 function optimizeDoorPosition(index: number): DoorPlacementResult | null {
@@ -437,9 +490,21 @@ function optimizeDoorPosition(index: number): DoorPlacementResult | null {
   const result = optimizeDoorPlacement(model.value, spec, radius.value, {
     minStubLength: minStubLength.value,
     increment: state.increment,
-    otherDoors: doorSpecs.value.filter((_, i) => i !== index),
+    otherDoors: portalSpecs.value.filter((s) => s.id !== spec.id),
   })
   state.doors[index].azimuthDeg = result.azimuthDeg
+  return result
+}
+
+function optimizeWindowPosition(index: number): DoorPlacementResult | null {
+  const spec = windowSpecs.value[index]
+  if (!spec) return null
+  const result = optimizeDoorPlacement(model.value, spec, radius.value, {
+    minStubLength: minStubLength.value,
+    increment: state.increment,
+    otherDoors: portalSpecs.value.filter((s) => s.id !== spec.id),
+  })
+  state.framedWindows[index].azimuthDeg = result.azimuthDeg
   return result
 }
 
@@ -528,6 +593,7 @@ const projectSettings = computed(() => ({
   stock: activeStock.value,
   openings: { ...state.openings },
   doors: state.doors.map((d) => ({ ...d })),
+  windows: state.framedWindows.map((w) => ({ ...w })),
   panelPlacement: state.panelPlacement,
 }))
 
@@ -643,6 +709,25 @@ function loadProjectFile(text: string): boolean {
       depthMm: typeof d.depthMm === 'number' ? d.depthMm : 0,
       marginMm: typeof d.marginMm === 'number' && d.marginMm > 0 ? d.marginMm : 0,
     }))
+  state.framedWindows = (settings.windows ?? [])
+    .filter(
+      (w) =>
+        typeof w?.azimuthDeg === 'number' &&
+        typeof w?.sillMm === 'number' &&
+        typeof w?.widthMm === 'number' &&
+        typeof w?.heightMm === 'number' &&
+        w.sillMm > 0 &&
+        w.widthMm > 0 &&
+        w.heightMm > 0,
+    )
+    .map((w) => ({
+      azimuthDeg: w.azimuthDeg,
+      sillMm: w.sillMm,
+      widthMm: w.widthMm,
+      heightMm: w.heightMm,
+      depthMm: typeof w.depthMm === 'number' ? w.depthMm : 0,
+      marginMm: typeof w.marginMm === 'number' && w.marginMm > 0 ? w.marginMm : 0,
+    }))
   if (
     settings.panelPlacement === 'outside' ||
     settings.panelPlacement === 'inside' ||
@@ -676,6 +761,7 @@ function persistedSlice() {
     trueSize: state.trueSize,
     openings: { ...state.openings },
     doors: state.doors.map((d) => ({ ...d })),
+    framedWindows: state.framedWindows.map((w) => ({ ...w })),
     closeDoorways: state.closeDoorways,
     panelPlacement: state.panelPlacement,
     optimizerMin: state.optimizer.min,
@@ -743,6 +829,27 @@ function restorePersisted() {
             marginMm: typeof d.marginMm === 'number' && d.marginMm > 0 ? d.marginMm : 0,
           }))
       : state.doors
+    state.framedWindows = Array.isArray(p.framedWindows)
+      ? (p.framedWindows as Record<string, unknown>[])
+          .filter(
+            (w) =>
+              typeof w?.azimuthDeg === 'number' &&
+              typeof w?.sillMm === 'number' &&
+              (w.sillMm as number) > 0 &&
+              typeof w?.widthMm === 'number' &&
+              (w.widthMm as number) > 0 &&
+              typeof w?.heightMm === 'number' &&
+              (w.heightMm as number) > 0,
+          )
+          .map((w) => ({
+            azimuthDeg: w.azimuthDeg as number,
+            sillMm: w.sillMm as number,
+            widthMm: w.widthMm as number,
+            heightMm: w.heightMm as number,
+            depthMm: typeof w.depthMm === 'number' ? w.depthMm : 0,
+            marginMm: typeof w.marginMm === 'number' && w.marginMm > 0 ? w.marginMm : 0,
+          }))
+      : state.framedWindows
     // Openings last: the geometry fields above may have cleared them via the
     // model watcher; validate face ids against the restored model.
     if (p.openings && typeof p.openings === 'object') {
@@ -796,6 +903,7 @@ function resetProject() {
   state.trueSize = false
   state.openings = {}
   state.doors = []
+  state.framedWindows = []
   state.closeDoorways = true
   state.panelPlacement = 'outside'
   state.openingTool = 'off'
@@ -838,11 +946,17 @@ export function useDomeProject() {
     openingGroups,
     doorway,
     doorSpecs,
+    windowSpecs,
+    doorInfos,
+    windowInfos,
     panelPlan,
     paintFace,
     addDoorAt,
     removeDoor,
+    addWindowAt,
+    removeWindow,
     optimizeDoorPosition,
+    optimizeWindowPosition,
     removeOpeningGroup,
     clearOpenings,
     increments,

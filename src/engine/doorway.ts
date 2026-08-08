@@ -17,6 +17,10 @@ export interface DoorSpec {
   /** Clearance band around the rough opening: the shell is cut back this
    * much beyond the buck outline (trim/shim zone on the face plane). */
   margin?: number
+  /** Height of the opening's bottom above the base plane. 0 = a door on
+   * the ground; > 0 = a framed window floating on the shell (its buck gains
+   * a sill and the closure gains a bottom apron). */
+  sillHeight?: number
 }
 
 /** A strut interrupted by a doorway: the surviving piece lands on the
@@ -33,7 +37,14 @@ export interface TrimmedStrut {
 }
 
 export interface ClosureMember {
-  part: 'wall plate' | 'wall stud' | 'top blocking' | 'shell edge' | 'top edge'
+  part:
+    | 'wall plate'
+    | 'wall stud'
+    | 'top blocking'
+    | 'shell edge'
+    | 'top edge'
+    | 'sill blocking'
+    | 'sill edge'
   /** Cut length, working units. */
   length: number
   quantity: number
@@ -51,15 +62,19 @@ export interface ClosureMember {
 export interface ClosureProfile {
   /** Envelope half-width = width/2 + margin. */
   halfWidth: number
-  /** Envelope top above the base plane = height + margin. */
+  /** Envelope top above the base plane = sill + height + margin. */
   topHeight: number
+  /** Envelope bottom above the base plane (0 for doors; sill − margin for
+   * framed windows, which also get a bottom apron plane). */
+  lowHeight: number
   /** Side-wall outer edges: [radialDist, heightAboveBase][], ordered by
-   * radial distance from the buck plane out to where the shell meets the
-   * base. side +1 / -1 tangential. */
+   * radial distance. side +1 / -1 tangential. */
   wallPos: [number, number][]
   wallNeg: [number, number][]
   /** Top-plane outer edge: [tangentialOffset, radialDist][]. */
   top: [number, number][]
+  /** Bottom-plane (sill apron) outer edge; empty for doors. */
+  bottom: [number, number][]
 }
 
 export interface DoorFrameInfo extends DoorSpec {
@@ -84,6 +99,8 @@ export interface DoorFrameInfo extends DoorSpec {
    * faceted shell. Working units². Zero when the door doesn't fit. */
   closureSideArea: number
   closureTopArea: number
+  /** Bottom apron plane under a framed window (0 for doors). */
+  closureBottomArea: number
   /** Flat face band at the buck plane between the buck outline and the cut
    * envelope (only non-zero with margin). */
   closureFaceArea: number
@@ -168,7 +185,10 @@ interface DoorFrame {
   z0: number
   /** Cut envelope: buck + margin. */
   halfWidth: number
-  height: number
+  /** Envelope vertical bounds relative to the base plane. zClipLow is -inf
+   * for doors (nothing below the base) and sill - margin for windows. */
+  zClipLow: number
+  zClipHigh: number
   /** Cutting starts here — the buck plane, or the auto-fit plane when the
    * buck projects beyond it (the walkway must still pierce the shell).
    * Struts behind this plane pass through untouched. */
@@ -199,7 +219,7 @@ function insideInterval(frame: DoorFrame, a: Vec3, b: Vec3): [number, number] | 
   if (!clip(tA, tB, -frame.halfWidth, frame.halfWidth)) return null
   const zA = a[2] - frame.z0
   const zB = b[2] - frame.z0
-  if (!clip(zA, zB, -1e9, frame.height)) return null
+  if (!clip(zA, zB, frame.zClipLow, frame.zClipHigh)) return null
   const uA = frame.ux * a[0] + frame.uy * a[1]
   const uB = frame.ux * b[0] + frame.uy * b[1]
   if (!clip(uA, uB, frame.cutPlaneDist, 1e12)) return null
@@ -210,7 +230,12 @@ function insidePoint(frame: DoorFrame, p: Vec3): boolean {
   const t = -frame.uy * p[0] + frame.ux * p[1]
   const z = p[2] - frame.z0
   const u = frame.ux * p[0] + frame.uy * p[1]
-  return Math.abs(t) <= frame.halfWidth && z <= frame.height && u >= frame.cutPlaneDist
+  return (
+    Math.abs(t) <= frame.halfWidth &&
+    z >= frame.zClipLow &&
+    z <= frame.zClipHigh &&
+    u >= frame.cutPlaneDist
+  )
 }
 
 const lerp3 = (a: Vec3, b: Vec3, s: number): Vec3 => [
@@ -375,9 +400,13 @@ export function cutDoorways(
     const margin = Math.max(0, spec.margin ?? 0)
     const extraDepth = spec.extraDepth ?? 0
     const halfBuck = spec.width / 2
-    const zTop = z0 + spec.height
+    const sill = Math.max(0, spec.sillHeight ?? 0)
+    const zBotAbs = z0 + sill
+    const zTopAbs = z0 + sill + spec.height
 
-    const fitSq = radius * radius - zTop * zTop - halfBuck * halfBuck
+    // All four buck corners must fit inside the sphere.
+    const fitSq =
+      radius * radius - Math.max(zTopAbs * zTopAbs, zBotAbs * zBotAbs) - halfBuck * halfBuck
     const fits = fitSq > 0
     // Auto fit puts the buck corners on the sphere. Positive extra depth
     // recesses the buck (clamped clear of the dome center); negative pushes
@@ -386,8 +415,12 @@ export function cutDoorways(
     const framePlaneDist = fits ? Math.max(Math.sqrt(fitSq) - extraDepth, rBase * 0.15) : 0
 
     const halfEnv = halfBuck + margin
-    const envHeight = spec.height + margin
-    const zTopEnv = z0 + envHeight
+    /** Envelope vertical bounds relative to the base plane. Doors sit on the
+     * ground; framed windows float, with margin cut above AND below. */
+    const zLowRel = sill > 0 ? Math.max(0, sill - margin) : 0
+    const zHighRel = sill + spec.height + margin
+    const zTopEnv = z0 + zHighRel
+    const zLowEnv = z0 + zLowRel
 
     // ---- Faceted closure from the actual shell. The closure seals the
     // region BETWEEN the shell section and the buck plane: outside the buck
@@ -395,6 +428,7 @@ export function cutDoorways(
     let closureProfile: ClosureProfile | null = null
     let closureSideArea = 0
     let closureTopArea = 0
+    let closureBottomArea = 0
     const closureFraming: ClosureMember[] = []
     if (fits) {
       const tris = localTriangles(model, radius, ux, uy)
@@ -406,17 +440,20 @@ export function cutDoorways(
         const lo = Math.min(framePlaneDist, uShellMax)
         const hi = Math.max(framePlaneDist, uShellMax)
         const raw = upperEnvelope(segs, lo, hi, 12)
-        // Shell height above the base, clamped to [0, envelope top]; beyond
-        // the shell's reach the height is 0 (open air).
+        // Shell height above the base, clamped to the envelope band; beyond
+        // the shell's reach the height drops to the band floor (open air).
         const pts: [number, number][] = []
         const clampH = (u: number, zAbs: number) =>
-          u > uShellMax - 1e-9 ? 0 : Math.min(Math.max(zAbs - z0, 0), envHeight)
+          u > uShellMax - 1e-9 ? zLowRel : Math.min(Math.max(zAbs - z0, zLowRel), zHighRel)
         for (const [u, zAbs] of raw) pts.push([u, clampH(u, zAbs)])
-        if (pts.length === 0 || pts[0][0] > lo + 1e-6) pts.unshift([lo, envHeight])
-        if (pts[pts.length - 1][0] < hi - 1e-6) pts.push([hi, 0])
+        if (pts.length === 0 || pts[0][0] > lo + 1e-6) pts.unshift([lo, zHighRel])
+        if (pts[pts.length - 1][0] < hi - 1e-6) pts.push([hi, zLowRel])
         // Ensure a breakpoint exactly at the buck plane (render rule splits there).
         if (!pts.some(([u]) => Math.abs(u - framePlaneDist) < 1e-6)) {
-          pts.push([framePlaneDist, Math.min(Math.max(profileAt(pts, framePlaneDist), 0), envHeight)])
+          pts.push([
+            framePlaneDist,
+            Math.min(Math.max(profileAt(pts, framePlaneDist), zLowRel), zHighRel),
+          ])
           pts.sort((p, q) => p[0] - q[0])
         }
         return pts
@@ -424,28 +461,43 @@ export function cutDoorways(
       const wallPos = wallFor(1)
       const wallNeg = wallFor(-1)
 
-      const topSegs = sectionSegments(tris, 2, zTopEnv, 1, 0).filter(
-        ([, u1, , u2]) => Math.max(u1, u2) > 0,
-      )
-      // Raw shell radial distance at the roof plane (may sit inside OR
-      // outside the buck plane); 0 where the roof clears the shell entirely.
-      const top = upperEnvelope(topSegs, -halfEnv, halfEnv, 12).map(
-        ([t, u]) => [t, Math.max(u, 0)] as [number, number],
-      )
+      const planeProfile = (zPlaneAbs: number): [number, number][] => {
+        const segs = sectionSegments(tris, 2, zPlaneAbs, 1, 0).filter(
+          ([, u1, , u2]) => Math.max(u1, u2) > 0,
+        )
+        // Raw shell radial distance at the plane (inside OR outside the buck
+        // plane); 0 where the plane clears the shell entirely.
+        return upperEnvelope(segs, -halfEnv, halfEnv, 12).map(
+          ([t, u]) => [t, Math.max(u, 0)] as [number, number],
+        )
+      }
+      const top = planeProfile(zTopEnv)
+      const bottom = sill > 0 ? planeProfile(zLowEnv) : []
 
-      closureProfile = { halfWidth: halfEnv, topHeight: envHeight, wallPos, wallNeg, top }
+      closureProfile = {
+        halfWidth: halfEnv,
+        topHeight: zHighRel,
+        lowHeight: zLowRel,
+        wallPos,
+        wallNeg,
+        top,
+        bottom,
+      }
 
-      // Wall region height at u: recessed side (u ≥ buck plane) spans base
-      // to shell; projecting side (u ≤ buck plane) spans shell to roof.
+      // Wall region height at u: recessed side (u ≥ buck plane) spans the
+      // band floor to the shell; projecting side spans shell to band top.
       const regionProfile = (wall: [number, number][]): [number, number][] =>
-        wall.map(([u, h]) => [u, u >= framePlaneDist - 1e-9 ? h : envHeight - h])
+        wall.map(([u, h]) => [u, u >= framePlaneDist - 1e-9 ? h - zLowRel : zHighRel - h])
       closureSideArea =
-        profileArea(regionProfile(wallPos), envHeight) +
-        profileArea(regionProfile(wallNeg), envHeight)
-      closureTopArea = profileArea(
-        top.map(([t, u]) => [t, Math.abs(u - framePlaneDist)] as [number, number]),
-        1e9,
-      )
+        profileArea(regionProfile(wallPos), zHighRel - zLowRel) +
+        profileArea(regionProfile(wallNeg), zHighRel - zLowRel)
+      const planeArea = (profile: [number, number][]) =>
+        profileArea(
+          profile.map(([t, u]) => [t, Math.abs(u - framePlaneDist)] as [number, number]),
+          1e9,
+        )
+      closureTopArea = planeArea(top)
+      closureBottomArea = sill > 0 ? planeArea(bottom) : 0
 
       // ---- Closure framing on the faceted profiles ----
       const spacing = opts.studSpacing ?? 0
@@ -455,14 +507,15 @@ export function cutDoorways(
           [-1, wallNeg],
         ] as const) {
           if (wall.length < 2) continue
-          // Ground plate spans from the buck plane to where the shell meets
-          // the base (whichever side of the buck that is).
+          // Band-floor plate spans from the buck plane to where the shell
+          // meets the envelope floor (the base for doors, the sill apron
+          // plane for windows).
           let uZero = wall[wall.length - 1][0]
           for (let i = 1; i < wall.length; i++) {
             const [u0, h0] = wall[i - 1]
             const [u1, h1] = wall[i]
-            if (h0 > 1e-6 && h1 <= 1e-6) {
-              uZero = u0 + ((u1 - u0) * h0) / (h0 - h1 || 1)
+            if (h0 > zLowRel + 1e-6 && h1 <= zLowRel + 1e-6) {
+              uZero = u0 + ((u1 - u0) * (h0 - zLowRel)) / (h0 - h1 || 1)
               break
             }
           }
@@ -474,8 +527,8 @@ export function cutDoorways(
               length: plateB - plateA,
               quantity: 1,
               side,
-              a: [plateA, 0],
-              b: [plateB, 0],
+              a: [plateA, zLowRel],
+              b: [plateB, zLowRel],
             })
           }
           // Studs march outward from the buck plane in both directions.
@@ -483,8 +536,8 @@ export function cutDoorways(
           const uHi = wall[wall.length - 1][0]
           for (const dir of [1, -1]) {
             for (let u = framePlaneDist + dir * spacing; u > uLo && u < uHi; u += dir * spacing) {
-              const h = Math.min(Math.max(profileAt(wall, u), 0), envHeight)
-              const [zA, zB] = u >= framePlaneDist ? [0, h] : [h, envHeight]
+              const h = Math.min(Math.max(profileAt(wall, u), zLowRel), zHighRel)
+              const [zA, zB] = u >= framePlaneDist ? [zLowRel, h] : [h, zHighRel]
               if (zB - zA < opts.minStubLength) continue
               closureFraming.push({
                 part: 'wall stud',
@@ -505,8 +558,8 @@ export function cutDoorways(
           for (let i = 1; i < merged.length; i++) {
             const h0 = merged[i - 1][1]
             const h1 = merged[i][1]
-            const flat0 = h0 <= 1e-6 && h1 <= 1e-6
-            const flatTop = h0 >= envHeight - 1e-6 && h1 >= envHeight - 1e-6
+            const flat0 = h0 <= zLowRel + 1e-6 && h1 <= zLowRel + 1e-6
+            const flatTop = h0 >= zHighRel - 1e-6 && h1 >= zHighRel - 1e-6
             if (flat0 || flatTop) {
               if (run.length > 1) runs.push(run)
               run = []
@@ -542,39 +595,47 @@ export function cutDoorways(
             }
           }
         }
-        // Top blocking between the roof-plane shell crossing and the buck.
-        for (let t = -halfEnv + spacing; t < halfEnv - 1e-9; t += spacing) {
-          const uShell = profileAt(top, t)
-          const len = Math.abs(uShell - framePlaneDist)
-          if (len >= opts.minStubLength && uShell > 1e-6) {
+        // Blocking + edge members on the horizontal closure planes (roof,
+        // and the sill apron for windows).
+        const planeMembers = (
+          profile: [number, number][],
+          blockingPart: 'top blocking' | 'sill blocking',
+          edgePart: 'top edge' | 'sill edge',
+        ) => {
+          for (let t = -halfEnv + spacing; t < halfEnv - 1e-9; t += spacing) {
+            const uShell = profileAt(profile, t)
+            const len = Math.abs(uShell - framePlaneDist)
+            if (len >= opts.minStubLength && uShell > 1e-6) {
+              closureFraming.push({
+                part: blockingPart,
+                length: len,
+                quantity: 1,
+                side: 0,
+                a: [t, Math.min(uShell, framePlaneDist)],
+                b: [t, Math.max(uShell, framePlaneDist)],
+              })
+            }
+          }
+          const mergedPlane = mergeCollinear(profile)
+          for (let i = 1; i < mergedPlane.length; i++) {
+            const [t0, u0] = mergedPlane[i - 1]
+            const [t1, u1] = mergedPlane[i]
+            if (u0 <= 1e-6 && u1 <= 1e-6) continue
+            if (Math.max(Math.abs(u0 - framePlaneDist), Math.abs(u1 - framePlaneDist)) < opts.minStubLength) continue
+            const len = Math.hypot(t1 - t0, u1 - u0)
+            if (len < opts.minStubLength) continue
             closureFraming.push({
-              part: 'top blocking',
+              part: edgePart,
               length: len,
               quantity: 1,
               side: 0,
-              a: [t, Math.min(uShell, framePlaneDist)],
-              b: [t, Math.max(uShell, framePlaneDist)],
+              a: [t0, u0],
+              b: [t1, u1],
             })
           }
         }
-        // Top-edge members along the roof-plane shell crossing.
-        const mergedTop = mergeCollinear(top)
-        for (let i = 1; i < mergedTop.length; i++) {
-          const [t0, u0] = mergedTop[i - 1]
-          const [t1, u1] = mergedTop[i]
-          if (u0 <= 1e-6 && u1 <= 1e-6) continue
-          if (Math.max(Math.abs(u0 - framePlaneDist), Math.abs(u1 - framePlaneDist)) < opts.minStubLength) continue
-          const len = Math.hypot(t1 - t0, u1 - u0)
-          if (len < opts.minStubLength) continue
-          closureFraming.push({
-            part: 'top edge',
-            length: len,
-            quantity: 1,
-            side: 0,
-            a: [t0, u0],
-            b: [t1, u1],
-          })
-        }
+        planeMembers(top, 'top blocking', 'top edge')
+        if (sill > 0) planeMembers(bottom, 'sill blocking', 'sill edge')
       }
     }
 
@@ -587,10 +648,10 @@ export function cutDoorways(
       joints.add(jkey(m.side, m.b[0], m.b[1]))
     }
     if (fits) {
-      joints.add(jkey(9, -halfBuck, 0))
-      joints.add(jkey(9, halfBuck, 0))
-      joints.add(jkey(9, -halfBuck, spec.height))
-      joints.add(jkey(9, halfBuck, spec.height))
+      joints.add(jkey(9, -halfBuck, sill))
+      joints.add(jkey(9, halfBuck, sill))
+      joints.add(jkey(9, -halfBuck, sill + spec.height))
+      joints.add(jkey(9, halfBuck, sill + spec.height))
     }
 
     perDoor.set(spec.id, {
@@ -607,7 +668,8 @@ export function cutDoorways(
       area: spec.width * spec.height,
       closureSideArea,
       closureTopArea,
-      closureFaceArea: fits ? 2 * halfEnv * envHeight - spec.width * spec.height : 0,
+      closureBottomArea,
+      closureFaceArea: fits ? 2 * halfEnv * (zHighRel - zLowRel) - spec.width * spec.height : 0,
       closureFraming,
       closureJointCount: joints.size,
       closureProfile,
@@ -619,7 +681,8 @@ export function cutDoorways(
       uy,
       z0,
       halfWidth: halfEnv,
-      height: envHeight,
+      zClipLow: sill > 0 ? zLowRel : -1e9,
+      zClipHigh: zHighRel,
       cutPlaneDist: fits ? Math.min(framePlaneDist, Math.sqrt(fitSq)) : framePlaneDist,
     })
   }
@@ -753,11 +816,15 @@ function placementStats(
   const ux = Math.cos(az)
   const uy = Math.sin(az)
   const z0 = model.cutZ * radius
+  const sillZone = Math.max(0, spec.sillHeight ?? 0)
   const inZone = (x: number, y: number, z: number) => {
     const u = ux * x + uy * y
     const t = -uy * x + ux * y
     const h = z - z0
-    return u > radius * 0.4 && h >= -1e-6 && h <= spec.height * 1.25 && Math.abs(t) <= spec.width
+    return u > radius * 0.4 &&
+      h >= sillZone - spec.height * 0.25 &&
+      h <= sillZone + spec.height * 1.25 &&
+      Math.abs(t) <= spec.width
       ? Math.abs(t)
       : Infinity
   }

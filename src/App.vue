@@ -128,7 +128,9 @@ const chips = computed(() => [
                   ? 'Erasing openings — click panels'
                   : state.openingTool === 'door'
                     ? 'Placing doorway — click the dome where it goes'
-                    : `Placing ${state.openingTool}s — click panels`
+                    : state.openingTool === 'window'
+                      ? 'Placing framed window — click the dome where it goes'
+                      : `Placing ${state.openingTool}s — click panels`
               }}
             </span>
           </div>

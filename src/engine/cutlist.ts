@@ -180,6 +180,23 @@ export function buildCutList(
           note: `${door.id} rough-opening span; add framing allowance for your style`,
         },
       )
+      if ((door.sillHeight ?? 0) > 0) {
+        const sillCut = roundToIncrement(door.headerLength, opts.increment)
+        rows.push({
+          typeId: -1,
+          label: `${door.id} sill`,
+          quantity: 1,
+          chordLength: door.headerLength,
+          exactCutLength: door.headerLength,
+          roundedCutLength: sillCut,
+          roundingError: Math.abs(sillCut - door.headerLength),
+          axialAngleDeg: 90,
+          dihedralMinDeg: NaN,
+          dihedralMaxDeg: NaN,
+          kind: 'frame',
+          note: `${door.id} window sill, slope for drainage on site`,
+        })
+      }
 
       // Closure framing: group identical part+length pieces into one row.
       const framingGroups = new Map<string, { part: string; exact: number; rounded: number; qty: number }>()
@@ -196,6 +213,8 @@ export function buildCutList(
         'top blocking': `${door.id} closure top blocking, buck to shell`,
         'shell edge': `${door.id} closure rake along the shell facet — trimmed struts land here`,
         'top edge': `${door.id} closure roof edge along the shell facet`,
+        'sill blocking': `${door.id} closure sill apron blocking, buck to shell`,
+        'sill edge': `${door.id} closure sill apron edge along the shell facet`,
       }
       for (const g of [...framingGroups.values()].sort(
         (a, b) => a.part.localeCompare(b.part) || b.rounded - a.rounded,

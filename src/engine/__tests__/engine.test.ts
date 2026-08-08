@@ -1129,3 +1129,35 @@ describe('zome generator — leveled base', () => {
     for (const f of halfTris) expect(f.edgeIds.length).toBe(3)
   })
 })
+
+describe('rhombus panels in the sheet plan', () => {
+  const model = generateDome({ frequency: 3, fraction: '1/2', baseMode: 'leveled' })
+  const sheet = { sheetW: 48, sheetL: 96, sheetLabel: '4×8 ft sheet' }
+
+  it('nests two rhombi per bounding rect and groups by diagonals', () => {
+    const plan = planPanels(model, 150, {
+      ...sheet,
+      skinFactor: 1,
+      rhombs: [
+        { d1: 60, d2: 40 },
+        { d1: 60, d2: 40 },
+        { d1: 90, d2: 30 },
+      ],
+    })
+    expect(plan.rhombs.length).toBe(2)
+    const z = plan.rhombs.find((r) => Math.abs(r.d1 - 60) < 1e-6)!
+    expect(z.count).toBe(2)
+    expect(z.area).toBeCloseTo(1200, 9)
+    // 60×40 bounding rect: floor(96/60)=1 × floor(48/40)=1 × 2 = 2 per sheet.
+    expect(z.perSheet).toBe(2)
+    expect(z.sheets).toBe(1)
+  })
+
+  it('doubles with two skins, seams oversize, defaults empty', () => {
+    const dbl = planPanels(model, 150, { ...sheet, skinFactor: 2, rhombs: [{ d1: 60, d2: 40 }] })
+    expect(dbl.rhombs[0].count).toBe(2)
+    const big = planPanels(model, 150, { ...sheet, skinFactor: 1, rhombs: [{ d1: 120, d2: 60 }] })
+    expect(big.rhombs[0].seamed).toBe(true)
+    expect(planPanels(model, 150, { ...sheet, skinFactor: 1 }).rhombs).toEqual([])
+  })
+})

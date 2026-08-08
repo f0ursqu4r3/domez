@@ -34,9 +34,27 @@ export interface RectPanelType {
   sheets: number
 }
 
+/** Rhombic zome panels in the sheet plan (two nest per d1×d2 bounding rect). */
+export interface RhombPanelType {
+  /** Z1, Z2, ... smallest-area first. */
+  label: string
+  count: number
+  /** Long (vertical) diagonal. */
+  d1: number
+  /** Short (horizontal) diagonal. */
+  d2: number
+  /** One rhombus, d1 × d2 / 2. */
+  area: number
+  /** 0 = seamed. */
+  perSheet: number
+  seamed: boolean
+  sheets: number
+}
+
 export interface PanelPlan {
   types: PanelType[]
   rects: RectPanelType[]
+  rhombs: RhombPanelType[]
   sheetW: number
   sheetL: number
   sheetLabel: string
@@ -57,6 +75,8 @@ export interface PanelPlanOptions {
   skinFactor: 1 | 2
   /** Rectangular pieces to nest alongside the triangles (riser sheathing). */
   rects?: { w: number; h: number }[]
+  /** Rhombic pieces by diagonals (zome skin panels). */
+  rhombs?: { d1: number; d2: number }[]
 }
 
 /** Waste allowance for seamed (multi-piece) panels. */
@@ -152,13 +172,44 @@ export function planPanels(model: DomeModel, radius: number, opts: PanelPlanOpti
       return { label: `R${i + 1}`, count, w: g.w, h: g.h, area, perSheet, seamed, sheets }
     })
 
-  const totalPanels = types.reduce((n, t) => n + t.count, 0) + rects.reduce((n, t) => n + t.count, 0)
+  // Rhombic pieces (zome skins): two mirrored rhombi nest into their d1×d2
+  // bounding rectangle, the same trick as the triangles.
+  const rhombGroups = new Map<string, { d1: number; d2: number; count: number }>()
+  for (const r of opts.rhombs ?? []) {
+    const key = `${r.d1.toFixed(3)}:${r.d2.toFixed(3)}`
+    const g = rhombGroups.get(key) ?? { d1: r.d1, d2: r.d2, count: 0 }
+    g.count++
+    rhombGroups.set(key, g)
+  }
+  const rhombs: RhombPanelType[] = [...rhombGroups.values()]
+    .sort((a, b) => a.d1 * a.d2 - b.d1 * b.d2)
+    .map((g, i) => {
+      const count = g.count * opts.skinFactor
+      const area = (g.d1 * g.d2) / 2
+      const perSheet = fitsPerSheet(g.d1, g.d2, opts.sheetW, opts.sheetL)
+      const seamed = perSheet === 0
+      const sheets = seamed
+        ? Math.ceil((count * area * SEAM_WASTE) / sheetArea)
+        : Math.ceil(count / perSheet)
+      return { label: `Z${i + 1}`, count, d1: g.d1, d2: g.d2, area, perSheet, seamed, sheets }
+    })
+
+  const totalPanels =
+    types.reduce((n, t) => n + t.count, 0) +
+    rects.reduce((n, t) => n + t.count, 0) +
+    rhombs.reduce((n, t) => n + t.count, 0)
   const totalPanelArea =
-    types.reduce((n, t) => n + t.area * t.count, 0) + rects.reduce((n, t) => n + t.area * t.count, 0)
-  const totalSheets = types.reduce((n, t) => n + t.sheets, 0) + rects.reduce((n, t) => n + t.sheets, 0)
+    types.reduce((n, t) => n + t.area * t.count, 0) +
+    rects.reduce((n, t) => n + t.area * t.count, 0) +
+    rhombs.reduce((n, t) => n + t.area * t.count, 0)
+  const totalSheets =
+    types.reduce((n, t) => n + t.sheets, 0) +
+    rects.reduce((n, t) => n + t.sheets, 0) +
+    rhombs.reduce((n, t) => n + t.sheets, 0)
   return {
     types,
     rects,
+    rhombs,
     sheetW: opts.sheetW,
     sheetL: opts.sheetL,
     sheetLabel: opts.sheetLabel,

@@ -8,6 +8,7 @@ import { optimizeDiameter } from '../optimize'
 import { analyzeOpenings } from '../openings'
 import { cutDoorways, optimizeDoorPlacement } from '../doorway'
 import { planPanels } from '../panels'
+import { buildRiser, orderedBaseRing } from '../riser'
 import { formatFeetInches, formatInchesFractional, roundToIncrement } from '../units'
 import { cross, dot, sub, add, length } from '../vec'
 
@@ -672,5 +673,96 @@ describe('units', () => {
   it('rounds to increments', () => {
     expect(roundToIncrement(37.34, 1 / 8)).toBeCloseTo(37.375, 12)
     expect(roundToIncrement(37.31, 1 / 8)).toBeCloseTo(37.25, 12)
+  })
+})
+
+describe('riser wall', () => {
+  const model = generateDome({ frequency: 3, fraction: '1/2', baseMode: 'leveled' })
+  const radius = 150 // inches
+  const opts = { height: 24, studSpacing: 16, memberWidth: 1.5, minStubLength: 6 }
+  const boundaryEdgeCount = model.edges.filter((e) => e.faceIds.length === 1).length
+
+  it('walks the base ring in order', () => {
+    const ring = orderedBaseRing(model)
+    expect(ring.length).toBe(boundaryEdgeCount)
+    // Every consecutive pair is a boundary edge.
+    for (let i = 0; i < ring.length; i++) {
+      const a = ring[i]
+      const b = ring[(i + 1) % ring.length]
+      expect(
+        model.edges.some(
+          (e) =>
+            e.faceIds.length === 1 &&
+            Math.min(e.v0, e.v1) === Math.min(a, b) &&
+            Math.max(e.v0, e.v1) === Math.max(a, b),
+        ),
+      ).toBe(true)
+    }
+    // CCW from +z: positive signed area.
+    let area2 = 0
+    for (let i = 0; i < ring.length; i++) {
+      const [x0, y0] = model.vertices[ring[i]].position
+      const [x1, y1] = model.vertices[ring[(i + 1) % ring.length]].position
+      area2 += x0 * y1 - x1 * y0
+    }
+    expect(area2).toBeGreaterThan(0)
+  })
+
+  it('builds one segment per base-ring edge with plates top and bottom', () => {
+    const riser = buildRiser(model, radius, opts)!
+    expect(riser).not.toBeNull()
+    expect(riser.segments.length).toBe(boundaryEdgeCount)
+    const tops = riser.members.filter((m) => m.part === 'riser top plate')
+    const bottoms = riser.members.filter((m) => m.part === 'riser bottom plate')
+    expect(tops.length).toBe(boundaryEdgeCount)
+    expect(bottoms.length).toBe(boundaryEdgeCount)
+    const plateTotal = [...tops, ...bottoms].reduce((s, m) => s + m.length, 0)
+    expect(plateTotal).toBeCloseTo(2 * riser.perimeter, 6)
+    // Plates live on their planes.
+    const zTop = model.cutZ * radius
+    for (const m of tops) expect(m.a[2]).toBeCloseTo(zTop, 6)
+    for (const m of bottoms) expect(m.a[2]).toBeCloseTo(zTop - opts.height, 6)
+  })
+
+  it('spaces studs on centers and posts every corner once', () => {
+    const riser = buildRiser(model, radius, opts)!
+    const studs = riser.members.filter((m) => m.part === 'riser stud')
+    // One corner stud per ring vertex...
+    const ring = orderedBaseRing(model)
+    const cornerStuds = studs.filter((m) =>
+      ring.some((vi) => {
+        const p = model.vertices[vi].position
+        return Math.hypot(m.a[0] - p[0] * radius, m.a[1] - p[1] * radius) < 1e-6
+      }),
+    )
+    expect(cornerStuds.length).toBe(ring.length)
+    // ...plus field studs at spacing, all full height.
+    for (const m of studs) {
+      expect(m.length).toBeCloseTo(opts.height, 6)
+      expect(m.b[2] - m.a[2]).toBeCloseTo(opts.height, 6)
+    }
+    const fieldStuds = studs.length - cornerStuds.length
+    const expected = riser.segments.reduce(
+      (n, s) => n + Math.max(0, Math.floor((s.length - opts.minStubLength) / opts.studSpacing)),
+      0,
+    )
+    expect(fieldStuds).toBe(expected)
+  })
+
+  it('reports sheathing area and joints', () => {
+    const riser = buildRiser(model, radius, opts)!
+    expect(riser.grossSheathingArea).toBeCloseTo(riser.perimeter * opts.height, 4)
+    expect(riser.netSheathingArea).toBeCloseTo(riser.grossSheathingArea, 4) // no doors yet
+    expect(riser.sheathingRects.length).toBe(riser.segments.length)
+    expect(riser.jointCount).toBeGreaterThan(0)
+    expect(riser.jointNodes.length).toBe(riser.jointCount)
+  })
+
+  it('returns null when disabled or inapplicable', () => {
+    expect(buildRiser(model, radius, { ...opts, height: 0 })).toBeNull()
+    const natural = generateDome({ frequency: 3, fraction: '1/2', baseMode: 'natural' })
+    expect(buildRiser(natural, radius, opts)).toBeNull()
+    const full = generateDome({ frequency: 3, fraction: 'full' })
+    expect(buildRiser(full, radius, opts)).toBeNull()
   })
 })

@@ -1747,3 +1747,38 @@ describe('goldberg leveled base', () => {
     expect(m.polys!.length).toBeGreaterThanOrEqual(nat.polys!.length)
   })
 })
+
+describe('polygon panels and patterns', () => {
+  const model = generateDome({ frequency: 3, fraction: '1/2', baseMode: 'leveled' })
+  const sheet = { sheetW: 48, sheetL: 96, sheetLabel: '4×8 ft sheet' }
+  const hex: [number, number][] = Array.from({ length: 6 }, (_, i) => [
+    20 + 20 * Math.cos((Math.PI / 3) * i),
+    20 + 20 * Math.sin((Math.PI / 3) * i),
+  ])
+
+  it('groups outlines, nests bounding boxes, folds totals', () => {
+    const plan = planPanels(model, 150, { ...sheet, skinFactor: 1, polyOutlines: [hex, hex] })
+    expect(plan.polys.length).toBe(1)
+    expect(plan.polys[0].count).toBe(2)
+    expect(plan.polys[0].sides).toBe(6)
+    expect(plan.polys[0].area).toBeCloseTo(((3 * Math.sqrt(3)) / 2) * 400, 3)
+    expect(plan.polys[0].perSheet).toBeGreaterThan(0)
+    const solo = planPanels(model, 150, { ...sheet, skinFactor: 1 })
+    expect(plan.totalSheets).toBe(solo.totalSheets + plan.polys[0].sheets)
+    expect(solo.polys).toEqual([])
+  })
+
+  it('patterns SVG emits polygon pages with interior angles summing right', () => {
+    const plan = planPanels(model, 150, {
+      ...sheet,
+      skinFactor: 1,
+      excludeFaceIds: new Set(model.faces.map((f) => f.id)),
+      polyOutlines: [hex],
+    })
+    const svg = panelPatternsSvg(plan, { units: 'imperial', title: 'test' })
+    expect(svg).toContain('data-pattern-page')
+    const angles = [...svg.matchAll(/data-angle="([\d.]+)"/g)].map((x) => Number(x[1]))
+    expect(angles.length).toBe(6)
+    expect(angles.reduce((a, b) => a + b, 0)).toBeCloseTo(720, 1)
+  })
+})

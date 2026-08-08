@@ -112,6 +112,51 @@ export function panelPatternsSvg(plan: PanelPlan, opts: PatternOptions): string 
     })
   }
 
+  for (const g of plan.polys) {
+    pages.push({
+      label: g.label,
+      count: g.count,
+      hint: hintOf(g.perSheet, g.seamed),
+      w: g.boundingW,
+      h: g.boundingH,
+      render: (ox, oy, s, push) => {
+        const pts = g.outline.map(([x, y]) => [ox + x * s, oy + y * s])
+        push(
+          `<path class="outline" d="M ${pts.map((p) => p.join(' ')).join(' L ')} Z"/>`,
+        )
+        const n = pts.length
+        for (let i = 0; i < n; i++) {
+          const p = g.outline[i]
+          const q = g.outline[(i + 1) % n]
+          const mx = ox + ((p[0] + q[0]) / 2) * s
+          const my = oy + ((p[1] + q[1]) / 2) * s
+          push(`<text x="${mx}" y="${my - fs * 0.3}" class="lbl">${esc(fmt(g.edges[i]))}</text>`)
+          // Interior angle at vertex i+1 (between edge i and edge i+1).
+          const r = g.outline[(i + 2) % n]
+          const v1 = [p[0] - q[0], p[1] - q[1]]
+          const v2 = [r[0] - q[0], r[1] - q[1]]
+          const ang = deg(
+            Math.acos(
+              Math.max(
+                -1,
+                Math.min(
+                  1,
+                  (v1[0] * v2[0] + v1[1] * v2[1]) /
+                    (Math.hypot(v1[0], v1[1]) * Math.hypot(v2[0], v2[1])),
+                ),
+              ),
+            ),
+          )
+          const cx0 = ox + q[0] * s
+          const cy0 = oy + q[1] * s
+          push(
+            `<text x="${cx0 + fs * 0.3}" y="${cy0 + fs * 0.9}" class="s" data-angle="${ang.toFixed(2)}">∠${ang.toFixed(1)}°</text>`,
+          )
+        }
+      },
+    })
+  }
+
   const pageCount = Math.max(1, pages.length)
   const parts: string[] = []
   parts.push(

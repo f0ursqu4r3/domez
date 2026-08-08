@@ -51,10 +51,30 @@ export interface RhombPanelType {
   sheets: number
 }
 
+/** Polygonal panels (goldberg hex/pent/partials) grouped by shape. */
+export interface PolyPanelType {
+  /** G1, G2, ... smallest-area first. */
+  label: string
+  count: number
+  sides: number
+  /** Representative edge lengths in ring order. */
+  edges: number[]
+  /** Representative outline, translated so the bbox min is the origin. */
+  outline: [number, number][]
+  area: number
+  boundingW: number
+  boundingH: number
+  /** 0 = seamed. */
+  perSheet: number
+  seamed: boolean
+  sheets: number
+}
+
 export interface PanelPlan {
   types: PanelType[]
   rects: RectPanelType[]
   rhombs: RhombPanelType[]
+  polys: PolyPanelType[]
   sheetW: number
   sheetL: number
   sheetLabel: string
@@ -77,6 +97,8 @@ export interface PanelPlanOptions {
   rects?: { w: number; h: number }[]
   /** Rhombic pieces by diagonals (zome skin panels). */
   rhombs?: { d1: number; d2: number }[]
+  /** Polygonal pieces as 2D outlines, working units (goldberg panels). */
+  polyOutlines?: [number, number][][]
 }
 
 /** Waste allowance for seamed (multi-piece) panels. */
@@ -194,22 +216,83 @@ export function planPanels(model: DomeModel, radius: number, opts: PanelPlanOpti
       return { label: `Z${i + 1}`, count, d1: g.d1, d2: g.d2, area, perSheet, seamed, sheets }
     })
 
+  // Polygonal pieces (goldberg panels): grid nesting of the bounding box.
+  const polyGroups = new Map<
+    string,
+    { outline: [number, number][]; edges: number[]; area: number; w: number; h: number; count: number }
+  >()
+  for (const raw of opts.polyOutlines ?? []) {
+    const xs = raw.map((p) => p[0])
+    const ys = raw.map((p) => p[1])
+    const minX = Math.min(...xs)
+    const minY = Math.min(...ys)
+    const outline = raw.map((p) => [p[0] - minX, p[1] - minY] as [number, number])
+    const w = Math.max(...xs) - minX
+    const h = Math.max(...ys) - minY
+    const edgeLens = outline.map((p, i) => {
+      const q = outline[(i + 1) % outline.length]
+      return Math.hypot(q[0] - p[0], q[1] - p[1])
+    })
+    let area = 0
+    for (let i = 0; i < outline.length; i++) {
+      const [x0, y0] = outline[i]
+      const [x1, y1] = outline[(i + 1) % outline.length]
+      area += x0 * y1 - x1 * y0
+    }
+    area = Math.abs(area) / 2
+    const key = `${edgeLens
+      .slice()
+      .sort((a, b) => a - b)
+      .map((e) => e.toFixed(2))
+      .join(':')}|${area.toFixed(1)}`
+    const g = polyGroups.get(key) ?? { outline, edges: edgeLens, area, w, h, count: 0 }
+    g.count++
+    polyGroups.set(key, g)
+  }
+  const polys: PolyPanelType[] = [...polyGroups.values()]
+    .sort((a, b) => a.area - b.area)
+    .map((g, i) => {
+      const count = g.count * opts.skinFactor
+      const perSheet = rectsPerSheet(g.w, g.h, opts.sheetW, opts.sheetL)
+      const seamed = perSheet === 0
+      const sheets = seamed
+        ? Math.ceil((count * g.area * SEAM_WASTE) / sheetArea)
+        : Math.ceil(count / perSheet)
+      return {
+        label: `G${i + 1}`,
+        count,
+        sides: g.outline.length,
+        edges: g.edges,
+        outline: g.outline,
+        area: g.area,
+        boundingW: g.w,
+        boundingH: g.h,
+        perSheet,
+        seamed,
+        sheets,
+      }
+    })
+
   const totalPanels =
     types.reduce((n, t) => n + t.count, 0) +
     rects.reduce((n, t) => n + t.count, 0) +
-    rhombs.reduce((n, t) => n + t.count, 0)
+    rhombs.reduce((n, t) => n + t.count, 0) +
+    polys.reduce((n, t) => n + t.count, 0)
   const totalPanelArea =
     types.reduce((n, t) => n + t.area * t.count, 0) +
     rects.reduce((n, t) => n + t.area * t.count, 0) +
-    rhombs.reduce((n, t) => n + t.area * t.count, 0)
+    rhombs.reduce((n, t) => n + t.area * t.count, 0) +
+    polys.reduce((n, t) => n + t.area * t.count, 0)
   const totalSheets =
     types.reduce((n, t) => n + t.sheets, 0) +
     rects.reduce((n, t) => n + t.sheets, 0) +
-    rhombs.reduce((n, t) => n + t.sheets, 0)
+    rhombs.reduce((n, t) => n + t.sheets, 0) +
+    polys.reduce((n, t) => n + t.sheets, 0)
   return {
     types,
     rects,
     rhombs,
+    polys,
     sheetW: opts.sheetW,
     sheetL: opts.sheetL,
     sheetLabel: opts.sheetLabel,

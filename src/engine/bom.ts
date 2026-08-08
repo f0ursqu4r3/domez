@@ -125,6 +125,7 @@ export function buildBom(
   for (const t of panelPlan.types) perimeter += t.count * (t.edges[0] + t.edges[1] + t.edges[2])
   for (const r of panelPlan.rects) perimeter += r.count * 2 * (r.w + r.h)
   for (const z of panelPlan.rhombs) perimeter += z.count * 4 * Math.hypot(z.d1 / 2, z.d2 / 2)
+  for (const g of panelPlan.polys) perimeter += g.count * g.edges.reduce((a, b) => a + b, 0)
   if (perimeter > 0) {
     const inches = panelPlan.sheetW < 100 // sheet sized in inches vs mm
     const spacing = inches ? 8 : 200

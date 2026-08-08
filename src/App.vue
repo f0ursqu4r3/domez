@@ -84,7 +84,7 @@ const chips = computed(() => [
           {{
             state.mode === 'zome'
               ? `Z${state.zomeSides} · ${state.zomePitchDeg}°`
-              : `${state.frequency}V · ${state.fraction}`
+              : `${state.mode === 'goldberg' ? '⬡' : ''}${state.frequency}V · ${state.fraction}`
           }}
           · ⌀ {{ diameter }} {{ state.units === 'imperial' ? 'ft' : 'm' }}
         </span>

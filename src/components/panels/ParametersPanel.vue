@@ -62,12 +62,17 @@ const best = computed(() => state.optimizer.result?.best ?? null)
           >
             <ToggleGroupItem value="geodesic" class="flex-1 text-xs">Geodesic</ToggleGroupItem>
             <ToggleGroupItem value="zome" class="flex-1 text-xs">Zome</ToggleGroupItem>
+            <ToggleGroupItem value="goldberg" class="flex-1 text-xs">Hex/Pent</ToggleGroupItem>
           </ToggleGroup>
           <FieldDescription v-if="state.mode === 'zome'">
             Every strut the same length, rhombic panels, profile you choose.
           </FieldDescription>
+          <FieldDescription v-else-if="state.mode === 'goldberg'">
+            Hexagon + pentagon panels, 3-way joints. Panels are structural — a bare hex frame is
+            not rigid.
+          </FieldDescription>
         </Field>
-        <template v-if="state.mode === 'geodesic'">
+        <template v-if="state.mode !== 'zome'">
           <Field>
             <FieldLabel>Frequency</FieldLabel>
             <ToggleGroup v-model="frequency" type="single" variant="outline" class="w-full">
@@ -260,9 +265,13 @@ const best = computed(() => state.optimizer.result?.best ?? null)
             <SelectTrigger class="w-full"><SelectValue /></SelectTrigger>
             <SelectContent>
               <SelectGroup>
-                <SelectItem v-for="j in JOINT_METHODS" :key="j.id" :value="j.id">{{
-                  j.label
-                }}</SelectItem>
+                <SelectItem
+                  v-for="j in JOINT_METHODS"
+                  :key="j.id"
+                  :value="j.id"
+                  :disabled="state.mode === 'goldberg' && j.id === 'mitered'"
+                  >{{ j.label }}</SelectItem
+                >
               </SelectGroup>
             </SelectContent>
           </Select>

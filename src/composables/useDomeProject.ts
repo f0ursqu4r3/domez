@@ -21,6 +21,7 @@ import { planPanels } from '@/engine/panels'
 import { buildRiser } from '@/engine/riser'
 import { buildBom, estimateCost } from '@/engine/bom'
 import { generateZome } from '@/engine/zome'
+import { generateGoldberg } from '@/engine/goldberg'
 import { diameterToWorking, IMPERIAL_INCREMENTS, METRIC_INCREMENTS } from '@/engine/units'
 import type { Fraction, Frequency, UnitSystem } from '@/engine/types'
 import { cutListCsv, hubsCsv, boardsCsv, openingsCsv, panelsCsv, miterCsv, costsCsv } from '@/engine/exports/csv'
@@ -140,8 +141,9 @@ const MM_PER_METER = 1000
 interface ProjectState {
   units: UnitSystem
   /** Structure family. Geodesic settings and zome settings are independent
-   * fields, so switching modes round-trips losslessly. */
-  mode: 'geodesic' | 'zome'
+   * fields, so switching modes round-trips losslessly. Goldberg (hex/pent
+   * dual) reuses the geodesic frequency/fraction fields. */
+  mode: 'geodesic' | 'zome' | 'goldberg'
   frequency: Frequency
   fraction: Fraction
   /** Shared by both modes: geodesic = slide boundary hubs onto the cut
@@ -328,6 +330,18 @@ watch(
   { flush: 'sync' },
 )
 
+// Mitered is a timber technique for high-valence hubs — not a 3-way panel
+// seam. Entering goldberg mode falls back to the material's default joint.
+watch(
+  () => state.mode,
+  (mode) => {
+    if (mode === 'goldberg' && state.jointId === 'mitered') {
+      state.jointId = material.value.defaultJoint
+    }
+  },
+  { flush: 'sync' },
+)
+
 // Fewer sides ⇒ fewer possible rows; keep the kept-bands count valid.
 watch(
   () => state.zomeSides,
@@ -345,7 +359,13 @@ const model = computed(() =>
         rows: state.zomeRows,
         baseMode: state.baseMode,
       })
-    : generateDome({ frequency: state.frequency, fraction: state.fraction, baseMode: state.baseMode }),
+    : state.mode === 'goldberg'
+      ? generateGoldberg({
+          frequency: state.frequency,
+          fraction: state.fraction,
+          baseMode: state.baseMode,
+        })
+      : generateDome({ frequency: state.frequency, fraction: state.fraction, baseMode: state.baseMode }),
 )
 
 // A new model invalidates edge/vertex/face ids; drop stale selection and
@@ -526,6 +546,49 @@ const panelPlan = computed(() => {
       })
     }
   }
+  // Goldberg polygons: exclude fan faces, pass surviving outlines in 2D.
+  const polyOutlines: [number, number][][] = []
+  if (model.value.polys) {
+    for (const pg of model.value.polys) {
+      const dead = pg.faceIds.some((fid) => exclude.has(fid))
+      pg.faceIds.forEach((fid) => exclude.add(fid))
+      if (dead) continue
+      const pts = pg.vertexIds.map((vi) => model.value.vertices[vi].position)
+      // Newell normal + tangent basis -> flatten to 2D, working units.
+      let nx = 0
+      let ny = 0
+      let nz = 0
+      for (let i = 0; i < pts.length; i++) {
+        const p = pts[i]
+        const q = pts[(i + 1) % pts.length]
+        nx += (p[1] - q[1]) * (p[2] + q[2])
+        ny += (p[2] - q[2]) * (p[0] + q[0])
+        nz += (p[0] - q[0]) * (p[1] + q[1])
+      }
+      const nl = Math.hypot(nx, ny, nz) || 1
+      const n: [number, number, number] = [nx / nl, ny / nl, nz / nl]
+      const ref: [number, number, number] = Math.abs(n[2]) > 0.9 ? [1, 0, 0] : [0, 0, 1]
+      const e1x = n[1] * ref[2] - n[2] * ref[1]
+      const e1y = n[2] * ref[0] - n[0] * ref[2]
+      const e1z = n[0] * ref[1] - n[1] * ref[0]
+      const e1l = Math.hypot(e1x, e1y, e1z) || 1
+      const e1: [number, number, number] = [e1x / e1l, e1y / e1l, e1z / e1l]
+      const e2: [number, number, number] = [
+        n[1] * e1[2] - n[2] * e1[1],
+        n[2] * e1[0] - n[0] * e1[2],
+        n[0] * e1[1] - n[1] * e1[0],
+      ]
+      polyOutlines.push(
+        pts.map(
+          (p) =>
+            [
+              (p[0] * e1[0] + p[1] * e1[1] + p[2] * e1[2]) * radius.value,
+              (p[0] * e2[0] + p[1] * e2[1] + p[2] * e2[2]) * radius.value,
+            ] as [number, number],
+        ),
+      )
+    }
+  }
   return planPanels(model.value, radius.value, {
     sheetW: panelSheet.value.w,
     sheetL: panelSheet.value.l,
@@ -534,6 +597,7 @@ const panelPlan = computed(() => {
     skinFactor: state.panelPlacement === 'both' ? 2 : 1,
     rects: riser.value?.sheathingRects,
     rhombs,
+    polyOutlines,
   })
 })
 
@@ -542,9 +606,11 @@ const panelPlan = computed(() => {
 function paintFace(faceId: number) {
   if (state.openingTool === 'off' || state.openingTool === 'door' || state.openingTool === 'window')
     return
-  // Zome rhombi paint as a unit: apply to both triangle halves.
-  const rh = model.value.rhombi?.find((r) => r.faceIds.includes(faceId))
-  const targets = rh ? rh.faceIds : [faceId]
+  // Zome rhombi / goldberg polygons paint as one unit.
+  const group =
+    model.value.polys?.find((r) => r.faceIds.includes(faceId)) ??
+    model.value.rhombi?.find((r) => r.faceIds.includes(faceId))
+  const targets = group ? group.faceIds : [faceId]
   for (const fid of targets) {
     if (state.openingTool === 'erase') {
       delete state.openings[fid]
@@ -721,7 +787,7 @@ const fileStem = computed(() => {
   const family =
     state.mode === 'zome'
       ? `z${state.zomeSides}-${state.zomePitchDeg}deg`
-      : `${state.frequency}v-${state.fraction.replace('/', '')}`
+      : `${state.mode === 'goldberg' ? 'hex' : ''}${state.frequency}v-${state.fraction.replace('/', '')}`
   return `domez-${family}-${diameter.value}${state.units === 'imperial' ? 'ft' : 'm'}`
 })
 
@@ -867,7 +933,7 @@ function titleOf() {
   const family =
     state.mode === 'zome'
       ? `Z${state.zomeSides} ${state.zomePitchDeg}°`
-      : `${state.frequency}V ${state.fraction}`
+      : `${state.mode === 'goldberg' ? '⬡' : ''}${state.frequency}V ${state.fraction}`
   return `DOMEZ ${family} · ⌀ ${diameter.value} ${state.units === 'imperial' ? 'ft' : 'm'}`
 }
 
@@ -878,7 +944,8 @@ function loadProjectFile(text: string): boolean {
   state.frequency = settings.frequency as Frequency
   state.fraction = settings.fraction as Fraction
   state.baseMode = (settings.baseMode as 'natural' | 'leveled') ?? 'natural'
-  state.mode = settings.mode === 'zome' ? 'zome' : 'geodesic'
+  state.mode =
+    settings.mode === 'zome' ? 'zome' : settings.mode === 'goldberg' ? 'goldberg' : 'geodesic'
   if (typeof settings.zomeSides === 'number' && settings.zomeSides >= 4 && settings.zomeSides <= 16)
     state.zomeSides = Math.round(settings.zomeSides)
   if (
@@ -1030,7 +1097,7 @@ function restorePersisted() {
     if ([1, 2, 3, 4, 5, 6].includes(p.frequency as number)) state.frequency = p.frequency as Frequency
     if (['3/8', '1/2', '5/8'].includes(p.fraction as string)) state.fraction = p.fraction as Fraction
     if (p.baseMode === 'natural' || p.baseMode === 'leveled') state.baseMode = p.baseMode
-    if (p.mode === 'geodesic' || p.mode === 'zome') state.mode = p.mode
+    if (p.mode === 'geodesic' || p.mode === 'zome' || p.mode === 'goldberg') state.mode = p.mode
     if (MATERIALS.some((m) => m.id === p.materialId)) state.materialId = p.materialId as string
     if (JOINT_METHODS.some((j) => j.id === p.jointId)) state.jointId = p.jointId as JointMethodId
     const num = (v: unknown, ok: (n: number) => boolean) =>

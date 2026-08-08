@@ -1782,3 +1782,16 @@ describe('polygon panels and patterns', () => {
     expect(angles.reduce((a, b) => a + b, 0)).toBeCloseTo(720, 1)
   })
 })
+
+describe('portals on a goldberg dome', () => {
+  it('cuts a doorway on a leveled 3V goldberg', () => {
+    const m = generateGoldberg({ frequency: 3, fraction: '1/2', baseMode: 'leveled' })
+    const cut = cutDoorways(m, [{ id: 'D1', azimuthDeg: 10, width: 40, height: 80 }], 150, {
+      minStubLength: 6,
+      studSpacing: 16,
+    })
+    expect(cut.doors[0].fits).toBe(true)
+    expect(cut.removedEdges.size + cut.trimmedEdges.size).toBeGreaterThan(0)
+    expect(cut.doors[0].closureProfile).not.toBeNull()
+  })
+})

@@ -1011,3 +1011,24 @@ describe('riser project settings', () => {
     expect(parsed.riserHeightMm).toBe(610)
   })
 })
+
+describe('1V and 2V kits', () => {
+  it('1V is the icosahedron cap: one strut type at both cuts', () => {
+    const cap = generateDome({ frequency: 1, fraction: '3/8' })
+    expect(cap.faces.length).toBe(5)
+    expect(cap.strutTypes.length).toBe(1)
+    const bowl = generateDome({ frequency: 1, fraction: '5/8' })
+    expect(bowl.faces.length).toBe(15)
+    expect(bowl.strutTypes.length).toBe(1)
+    expect(bowl.strutTypes[0].chordFactor).toBeCloseTo(1.0514622, 5)
+  })
+
+  it('2V 1/2 is the classic hemisphere with two strut types', () => {
+    const m = generateDome({ frequency: 2, fraction: '1/2' })
+    expect(m.strutTypes.length).toBe(2)
+    const cfs = m.strutTypes.map((t) => t.chordFactor).sort((a, b) => a - b)
+    expect(cfs[0]).toBeCloseTo(0.546533, 5)
+    expect(cfs[1]).toBeCloseTo(0.618034, 5)
+    expect(m.cutZ).toBeCloseTo(0, 9)
+  })
+})

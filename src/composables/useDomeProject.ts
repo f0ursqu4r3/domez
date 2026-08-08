@@ -841,7 +841,7 @@ function restorePersisted() {
   }
   try {
     if (p.units === 'imperial' || p.units === 'metric') state.units = p.units
-    if ([3, 4, 5, 6].includes(p.frequency as number)) state.frequency = p.frequency as Frequency
+    if ([1, 2, 3, 4, 5, 6].includes(p.frequency as number)) state.frequency = p.frequency as Frequency
     if (['3/8', '1/2', '5/8'].includes(p.fraction as string)) state.fraction = p.fraction as Fraction
     if (p.baseMode === 'natural' || p.baseMode === 'leveled') state.baseMode = p.baseMode
     if (MATERIALS.some((m) => m.id === p.materialId)) state.materialId = p.materialId as string

@@ -51,7 +51,7 @@ const best = computed(() => state.optimizer.result?.best ?? null)
           <FieldLabel>Frequency</FieldLabel>
           <ToggleGroup v-model="frequency" type="single" variant="outline" class="w-full">
             <ToggleGroupItem
-              v-for="f in ['3', '4', '5', '6']"
+              v-for="f in ['1', '2', '3', '4', '5', '6']"
               :key="f"
               :value="f"
               class="flex-1 font-mono"

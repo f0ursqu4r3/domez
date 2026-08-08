@@ -763,6 +763,8 @@ const exporters = {
       closeDoorways: state.closeDoorways,
       panelPlacement: state.panelPlacement,
       riser: riser.value,
+      jointId: state.jointId,
+      endOffset: workingEndOffset.value,
     })
     const exporter = new GLTFExporter()
     const result = await exporter.parseAsync(group, { binary: true })
@@ -1084,6 +1086,7 @@ export function useDomeProject() {
     workingDiameter,
     diameter,
     endOffset,
+    workingEndOffset,
     kerf,
     material,
     jointMethod,

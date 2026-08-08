@@ -2,6 +2,8 @@ import * as THREE from 'three'
 import type { DomeModel } from '@/engine/types'
 import type { OpeningAssignments, OpeningType } from '@/engine/openings'
 import type { DoorwayCut } from '@/engine/doorway'
+import type { JointMethodId } from '@/engine/cutlist'
+import { hubAxes } from '@/engine/hubs'
 import type { RiserModel } from '@/engine/riser'
 import { strutColor } from '@/engine/exports/svg'
 import type { ViewMode } from '@/composables/useDomeProject'
@@ -34,11 +36,20 @@ export interface BuildOptions {
   panelPlacement?: 'outside' | 'inside' | 'both'
   /** Stud-framed riser wall under the base ring (world working-unit coords). */
   riser?: RiserModel | null
+  /** Joint method for joint-accurate rendering. Only takes effect together
+   * with strutSection (True size): struts shorten to cut length and each
+   * hub renders as the real joint — spoked hub, timber plate, or
+   * flattened-pipe tab stack. */
+  jointId?: JointMethodId
+  /** Material removed per strut end, working units (drives hub/plate gaps). */
+  endOffset?: number
 }
 
 export interface DomePickMaps {
   /** instanceId per strut-type mesh -> edgeId */
   strutMaps: Map<THREE.InstancedMesh, number[]>
+  /** triangle index per merged beveled-strut mesh -> edgeId (joint mode). */
+  strutFaceMaps: Map<THREE.Mesh, number[]>
   hubMesh: THREE.InstancedMesh | null
   hubMap: number[]
   /** triangle index per panel mesh -> faceId */
@@ -62,6 +73,7 @@ export function buildDomeGroup(
   const group = new THREE.Group()
   const pick: DomePickMaps = {
     strutMaps: new Map(),
+    strutFaceMaps: new Map(),
     hubMesh: null,
     hubMap: [],
     panelMaps: new Map(),
@@ -83,6 +95,29 @@ export function buildDomeGroup(
 
   const selEdge = opts.selection?.kind === 'strut' ? opts.selection.edgeId : -1
   const selHub = opts.selection?.kind === 'hub' ? opts.selection.vertexId : -1
+
+  // ---- Joint-accurate mode: True size + a joint method ----
+  const jointMode = section !== undefined && opts.jointId !== undefined
+  const sectionW = section ? (section.kind === 'rect' ? section.width : section.diameter) : 0
+  const sectionD = section ? (section.kind === 'rect' ? section.depth : section.diameter) : 0
+  const endOffset = Math.max(0, opts.endOffset ?? 0)
+  /** How far each strut end pulls back from the vertex in joint mode. */
+  const endPull = !jointMode
+    ? 0
+    : opts.jointId === 'flattened-pipe'
+      ? sectionW * 1.5 // tube body stops where the flattened tab begins
+      : endOffset
+  const axes = jointMode ? hubAxes(model) : null
+  const axisThree = (vid: number) => {
+    const a = axes![vid]
+    return new THREE.Vector3(a[0], a[2], -a[1])
+  }
+  const steelMat = new THREE.MeshStandardMaterial({
+    color: 0xd8dee9,
+    roughness: 0.4,
+    metalness: 0.55,
+  })
+  const bevelStruts = jointMode && opts.jointId === 'timber-plate' && section?.kind === 'rect'
 
   const showStruts = opts.mode !== 'surface'
   const showPanels = opts.mode !== 'frame'
@@ -121,9 +156,94 @@ export function buildDomeGroup(
     const geo = isRect
       ? new THREE.BoxGeometry(1, 1, 1)
       : new THREE.CylinderGeometry(1, 1, 1, section ? 16 : 8, 1)
+    /** Shortened endpoints in joint mode (clamped to keep some body). */
+    const jointEnds = (a: THREE.Vector3, b: THREE.Vector3) => {
+      if (endPull <= 0) return [a, b] as const
+      const dir = b.clone().sub(a)
+      const len = dir.length()
+      const pull = Math.min(endPull, len * 0.33)
+      dir.normalize()
+      return [a.clone().addScaledVector(dir, pull), b.clone().addScaledVector(dir, -pull)] as const
+    }
     for (const t of model.strutTypes) {
       const keptEdges = t.edgeIds.filter((eid) => !cutEdges.has(eid))
       if (keptEdges.length === 0) continue
+      if (bevelStruts && section && section.kind === 'rect') {
+        // Timber-plate: one merged geometry of custom hexahedra whose end
+        // faces are cut perpendicular to each hub's axis (the axial bevel).
+        const positions: number[] = []
+        const faceMap: number[] = []
+        const w2 = section.width / 2
+        const d2 = section.depth / 2
+        for (const eid of keptEdges) {
+          const e = model.edges[eid]
+          const a3 = toThree(model.vertices[e.v0].position, radius)
+          const b3 = toThree(model.vertices[e.v1].position, radius)
+          const dir = b3.clone().sub(a3)
+          const len = dir.length()
+          dir.normalize()
+          const pull = Math.min(endOffset, len * 0.33)
+          const aP = a3.clone().addScaledVector(dir, pull)
+          const bP = b3.clone().addScaledVector(dir, -pull)
+          const mid = a3.clone().add(b3).multiplyScalar(0.5)
+          const explode =
+            explodeDist > 0
+              ? mid.clone().normalize().multiplyScalar(explodeDist)
+              : new THREE.Vector3()
+          const radial = mid.clone().normalize()
+          const zAxis = radial.clone().addScaledVector(dir, -dir.dot(radial)).normalize()
+          const xAxis = new THREE.Vector3().crossVectors(dir, zAxis)
+          // Project each end's 4 corners along the strut axis onto the
+          // plane through the pulled-back end with the hub-axis normal.
+          const endCorners = (endPt: THREE.Vector3, axis: THREE.Vector3) => {
+            const corners: THREE.Vector3[] = []
+            const denom = axis.dot(dir)
+            for (const [sx, sz] of [
+              [1, 1],
+              [-1, 1],
+              [-1, -1],
+              [1, -1],
+            ] as const) {
+              const c0 = endPt
+                .clone()
+                .addScaledVector(xAxis, sx * w2)
+                .addScaledVector(zAxis, sz * d2)
+              let tShift = Math.abs(denom) > 0.05 ? axis.dot(endPt.clone().sub(c0)) / denom : 0
+              tShift = Math.max(-section.width * 3, Math.min(section.width * 3, tShift))
+              corners.push(c0.addScaledVector(dir, tShift).add(explode))
+            }
+            return corners
+          }
+          const A = endCorners(aP, axisThree(e.v0))
+          const B = endCorners(bP, axisThree(e.v1))
+          const quad = (p0: THREE.Vector3, p1: THREE.Vector3, p2: THREE.Vector3, p3: THREE.Vector3) => {
+            positions.push(p0.x, p0.y, p0.z, p1.x, p1.y, p1.z, p2.x, p2.y, p2.z)
+            positions.push(p0.x, p0.y, p0.z, p2.x, p2.y, p2.z, p3.x, p3.y, p3.z)
+            faceMap.push(eid, eid)
+          }
+          quad(A[0], A[3], A[2], A[1]) // end cap at v0
+          quad(B[0], B[1], B[2], B[3]) // end cap at v1
+          for (let i = 0; i < 4; i++) {
+            quad(A[i], B[i], B[(i + 1) % 4], A[(i + 1) % 4])
+          }
+        }
+        const bgeo = new THREE.BufferGeometry()
+        bgeo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3))
+        bgeo.computeVertexNormals()
+        const mesh = new THREE.Mesh(
+          bgeo,
+          new THREE.MeshStandardMaterial({
+            color: new THREE.Color(strutColor(t.id)),
+            roughness: 0.8,
+            metalness: 0.05,
+            side: THREE.DoubleSide,
+          }),
+        )
+        mesh.name = `struts-beveled-${t.label}`
+        pick.strutFaceMaps.set(mesh, faceMap)
+        group.add(mesh)
+        continue
+      }
       const mat = new THREE.MeshStandardMaterial({
         color: new THREE.Color(strutColor(t.id)),
         roughness: isRect ? 0.8 : 0.55,
@@ -135,11 +255,11 @@ export function buildDomeGroup(
       const m = new THREE.Matrix4()
       keptEdges.forEach((eid, i) => {
         const e = model.edges[eid]
-        placeStrut(
-          m,
+        const [pa, pb] = jointEnds(
           toThree(model.vertices[e.v0].position, radius),
           toThree(model.vertices[e.v1].position, radius),
         )
+        placeStrut(m, pa, pb)
         mesh.setMatrixAt(i, m)
         mesh.setColorAt(
           i,
@@ -392,6 +512,9 @@ export function buildDomeGroup(
     const sphere = new THREE.SphereGeometry(1, 14, 10)
     const mat = new THREE.MeshStandardMaterial({ color: 0xd8dee9, roughness: 0.4, metalness: 0.55 })
     const keptVertices = model.vertices.filter((v) => !opts.doorway?.removedVertices.has(v.id))
+    // In joint mode the spheres shrink into the joint geometry — they stay
+    // as the raycast targets that carry the hub pick map.
+    const pickR = jointMode ? hubR * 0.55 : hubR
     const mesh = new THREE.InstancedMesh(sphere, mat, keptVertices.length)
     mesh.name = 'hubs'
     const m = new THREE.Matrix4()
@@ -404,7 +527,7 @@ export function buildDomeGroup(
             .normalize()
             .multiplyScalar(explodeDist * 1.15),
         )
-      m.makeScale(hubR, hubR, hubR).setPosition(p)
+      m.makeScale(pickR, pickR, pickR).setPosition(p)
       mesh.setMatrixAt(i, m)
       const color = v.id === selHub ? '#ffffff' : v.isBase ? '#f59e0b' : '#c7ced9'
       mesh.setColorAt(i, new THREE.Color(color))
@@ -414,6 +537,107 @@ export function buildDomeGroup(
     if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true
     pick.hubMesh = mesh
     group.add(mesh)
+
+    // ---- Joint-accurate hub geometry ----
+    if (jointMode && section) {
+      const cylGeo = new THREE.CylinderGeometry(1, 1, 1, 16)
+      const boxGeo = new THREE.BoxGeometry(1, 1, 1)
+      const orientAlong = (obj: THREE.Mesh, axis: THREE.Vector3) => {
+        obj.quaternion.setFromUnitVectors(UP, axis)
+      }
+      for (const v of keptVertices) {
+        const pos = toThree(v.position, radius)
+        const explode =
+          explodeDist > 0
+            ? pos
+                .clone()
+                .normalize()
+                .multiplyScalar(explodeDist * 1.15)
+            : new THREE.Vector3()
+        const axis = axisThree(v.id)
+        const dirs: THREE.Vector3[] = []
+        for (const eid of v.edgeIds) {
+          if (opts.doorway?.removedEdges.has(eid)) continue
+          const e = model.edges[eid]
+          const other = e.v0 === v.id ? e.v1 : e.v0
+          dirs.push(
+            toThree(model.vertices[other].position, radius).sub(pos).normalize(),
+          )
+        }
+        const at = (p: THREE.Vector3, obj: THREE.Mesh) => {
+          obj.position.copy(p).add(explode)
+          obj.name = 'joint'
+          group.add(obj)
+        }
+
+        if (opts.jointId === 'hub') {
+          const core = new THREE.Mesh(cylGeo, steelMat)
+          core.scale.set(sectionW * 0.7, sectionW * 2.4, sectionW * 0.7)
+          orientAlong(core, axis)
+          at(pos, core)
+          const spokeLen = Math.max(endOffset, sectionW * 0.5)
+          for (const d of dirs) {
+            const spoke =
+              section.kind === 'round'
+                ? new THREE.Mesh(cylGeo, steelMat)
+                : new THREE.Mesh(boxGeo, steelMat)
+            if (section.kind === 'round') {
+              spoke.scale.set(sectionW * 0.62, spokeLen, sectionW * 0.62)
+            } else {
+              spoke.scale.set(sectionW * 1.15, spokeLen, sectionD * 1.15)
+            }
+            spoke.quaternion.setFromUnitVectors(UP, d)
+            at(pos.clone().addScaledVector(d, spokeLen / 2), spoke)
+          }
+        } else if (opts.jointId === 'timber-plate') {
+          const t = sectionW * 0.16
+          const r = Math.max(endOffset * 1.9, sectionW * 1.2)
+          const plate = new THREE.Mesh(
+            new THREE.CylinderGeometry(r, r, t, Math.max(dirs.length, 5)),
+            steelMat,
+          )
+          orientAlong(plate, axis)
+          at(pos.clone().addScaledVector(axis, sectionD / 2 + t / 2), plate)
+        } else if (opts.jointId === 'flattened-pipe') {
+          const od = sectionW
+          const tabT = od * 0.15
+          const tabW = od * 1.57
+          const tabL = od * 1.5 + od * 0.35
+          dirs.forEach((d, i) => {
+            const side = new THREE.Vector3().crossVectors(axis, d)
+            if (side.lengthSq() < 1e-9) side.set(1, 0, 0)
+            side.normalize()
+            const flatAxis = new THREE.Vector3().crossVectors(d, side).normalize()
+            const tab = new THREE.Mesh(boxGeo, steelMat)
+            const mtx = new THREE.Matrix4().makeBasis(
+              side.clone().multiplyScalar(tabW),
+              d.clone().multiplyScalar(tabL),
+              flatAxis.clone().multiplyScalar(tabT),
+            )
+            const center = pos
+              .clone()
+              .addScaledVector(d, (od * 1.5 - od * 0.35) / 2)
+              .addScaledVector(axis, (i - (dirs.length - 1) / 2) * tabT)
+              .add(explode)
+            mtx.setPosition(center)
+            tab.applyMatrix4(mtx)
+            tab.name = 'joint'
+            group.add(tab)
+          })
+          const boltLen = dirs.length * tabT + od * 1.2
+          const bolt = new THREE.Mesh(cylGeo, steelMat)
+          bolt.scale.set(od * 0.19, boltLen, od * 0.19)
+          orientAlong(bolt, axis)
+          at(pos, bolt)
+          for (const side of [1, -1]) {
+            const washer = new THREE.Mesh(cylGeo, steelMat)
+            washer.scale.set(od * 0.45, od * 0.08, od * 0.45)
+            orientAlong(washer, axis)
+            at(pos.clone().addScaledVector(axis, (side * boltLen) / 2), washer)
+          }
+        }
+      }
+    }
   }
 
   // ---- Riser wall: sheathing quads, framing bars, joints ----

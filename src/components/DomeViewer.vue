@@ -10,6 +10,7 @@ const {
   model,
   radius,
   strutSectionWorking,
+  workingEndOffset,
   openingGroups,
   paintFace,
   addDoorAt,
@@ -62,6 +63,8 @@ function rebuildDome() {
     closeDoorways: state.closeDoorways,
     panelPlacement: state.panelPlacement,
     riser: riser.value,
+    jointId: state.jointId,
+    endOffset: workingEndOffset.value,
   })
   scene.add(domeGroup)
 }
@@ -131,7 +134,11 @@ function onPointerUp(ev: PointerEvent) {
 
   // Door/window tools: place a parametric opening at the clicked spot.
   if (state.openingTool === 'door' || state.openingTool === 'window') {
-    const targets: THREE.Object3D[] = [...pick.panelMaps.keys(), ...pick.strutMaps.keys()]
+    const targets: THREE.Object3D[] = [
+      ...pick.panelMaps.keys(),
+      ...pick.strutMaps.keys(),
+      ...pick.strutFaceMaps.keys(),
+    ]
     const hit = raycaster.intersectObjects(targets, false)[0]
     if (hit) {
       // three (x, z, -y) -> engine azimuth atan2(y, x) = atan2(-z, x).
@@ -162,11 +169,20 @@ function onPointerUp(ev: PointerEvent) {
     return
   }
 
-  const meshes: THREE.Object3D[] = [...pick.strutMaps.keys()]
+  const meshes: THREE.Object3D[] = [...pick.strutMaps.keys(), ...pick.strutFaceMaps.keys()]
   if (pick.hubMesh) meshes.push(pick.hubMesh)
   const hits = raycaster.intersectObjects(meshes, false)
   const hit = hits[0]
-  if (!hit || hit.instanceId === undefined) {
+  if (!hit) {
+    state.selection = null
+    return
+  }
+  const faceMap = pick.strutFaceMaps.get(hit.object as THREE.Mesh)
+  if (faceMap && hit.faceIndex != null) {
+    state.selection = { kind: 'strut', edgeId: faceMap[hit.faceIndex] }
+    return
+  }
+  if (hit.instanceId === undefined) {
     state.selection = null
     return
   }
@@ -255,6 +271,8 @@ watch(
     state.closeDoorways,
     state.panelPlacement,
     riser.value,
+    state.jointId,
+    workingEndOffset.value,
   ],
   () => rebuildDome(),
   { deep: true },

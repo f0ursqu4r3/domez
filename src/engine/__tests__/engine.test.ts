@@ -15,6 +15,7 @@ import { cutTemplatesSvg, boardDiagramsSvg } from '../exports/templates'
 import { buildBom, estimateCost, defaultPrice } from '../bom'
 import { costsCsv } from '../exports/csv'
 import { assemblyGuideSvg } from '../exports/guide'
+import { panelPatternsSvg } from '../exports/patterns'
 import { buildAssemblyPlan } from '../assembly'
 import { generateZome } from '../zome'
 import { hubAxes } from '../hubs'
@@ -1624,5 +1625,45 @@ describe('assembly guide', () => {
     expect(marks.length).toBe(
       dPlan.courses.reduce((n, c) => n + c.ringStrutIds.length + c.riserStrutIds.length, 0),
     )
+  })
+})
+
+describe('panel flat patterns', () => {
+  const model = generateDome({ frequency: 3, fraction: '1/2', baseMode: 'leveled' })
+
+  it('one dimensioned page per panel family member', () => {
+    const plan = planPanels(model, 150, {
+      sheetW: 48,
+      sheetL: 96,
+      sheetLabel: '4×8 ft sheet',
+      skinFactor: 1,
+      rects: [{ w: 40, h: 24 }],
+      rhombs: [{ d1: 60, d2: 40 }],
+    })
+    const svg = panelPatternsSvg(plan, { units: 'imperial', title: 'test' })
+    const pages = svg.match(/data-pattern-page/g) ?? []
+    expect(pages.length).toBe(plan.types.length + plan.rects.length + plan.rhombs.length)
+    const first = svg.indexOf('data-pattern-page')
+    const second = svg.indexOf('data-pattern-page', first + 1)
+    const firstPage = svg.slice(first, second)
+    const angles = [...firstPage.matchAll(/data-angle="([\d.]+)"/g)].map((m) => Number(m[1]))
+    expect(angles.length).toBe(3)
+    expect(angles[0] + angles[1] + angles[2]).toBeCloseTo(180, 1)
+    expect(svg).toContain(formatInchesFractional(plan.types[0].edges[0]))
+    expect(svg).toContain('drawn to fit')
+  })
+
+  it('empty plan renders a placeholder', () => {
+    const empty = panelPatternsSvg(
+      planPanels(model, 150, {
+        sheetW: 48,
+        sheetL: 96,
+        sheetLabel: '4×8 ft sheet',
+        skinFactor: 1,
+        excludeFaceIds: new Set(model.faces.map((f) => f.id)),
+      }),
+      { units: 'imperial', title: 'empty' },
+    )
+    expect(empty).toContain('no panels')
   })
 })

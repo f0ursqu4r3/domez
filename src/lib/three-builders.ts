@@ -106,7 +106,9 @@ export function buildDomeGroup(
     ? 0
     : opts.jointId === 'flattened-pipe'
       ? sectionW * 1.5 // tube body stops where the flattened tab begins
-      : endOffset
+      : opts.jointId === 'mitered'
+        ? 0 // full chord — ends meet at the vertex
+        : endOffset
   const axes = jointMode ? hubAxes(model) : null
   const axisThree = (vid: number) => {
     const a = axes![vid]
@@ -118,6 +120,36 @@ export function buildDomeGroup(
     metalness: 0.55,
   })
   const bevelStruts = jointMode && opts.jointId === 'timber-plate' && section?.kind === 'rect'
+  const miterStruts = jointMode && opts.jointId === 'mitered' && section?.kind === 'rect'
+  // Per-vertex fan of incident strut directions (three-space), for the
+  // neighbor seam planes of the mitered joint.
+  const fans = miterStruts
+    ? model.vertices.map((v) => {
+        const axis = axisThree(v.id)
+        const ref = Math.abs(axis.y) > 0.9 ? new THREE.Vector3(1, 0, 0) : new THREE.Vector3(0, 1, 0)
+        const e1 = new THREE.Vector3().crossVectors(axis, ref).normalize()
+        const e2 = new THREE.Vector3().crossVectors(axis, e1)
+        return v.edgeIds
+          .map((eid) => {
+            const e = model.edges[eid]
+            const other = e.v0 === v.id ? e.v1 : e.v0
+            const d = toThree(model.vertices[other].position, radius)
+              .sub(toThree(v.position, radius))
+              .normalize()
+            return { eid, d, ang: Math.atan2(d.dot(e2), d.dot(e1)) }
+          })
+          .sort((x, y) => x.ang - y.ang)
+      })
+    : null
+  const seamNormals = (vid: number, eid: number): THREE.Vector3[] => {
+    const fan = fans![vid]
+    const k = fan.findIndex((f) => f.eid === eid)
+    if (fan.length < 2) return []
+    const d = fan[k].d
+    return [fan[(k + 1) % fan.length].d, fan[(k - 1 + fan.length) % fan.length].d].map((dn) =>
+      d.clone().sub(dn).normalize(),
+    )
+  }
 
   const showStruts = opts.mode !== 'surface'
   const showPanels = opts.mode !== 'frame'
@@ -168,7 +200,7 @@ export function buildDomeGroup(
     for (const t of model.strutTypes) {
       const keptEdges = t.edgeIds.filter((eid) => !cutEdges.has(eid))
       if (keptEdges.length === 0) continue
-      if (bevelStruts && section && section.kind === 'rect') {
+      if ((bevelStruts || miterStruts) && section && section.kind === 'rect') {
         // Timber-plate: one merged geometry of custom hexahedra whose end
         // faces are cut perpendicular to each hub's axis (the axial bevel).
         const positions: number[] = []
@@ -182,7 +214,7 @@ export function buildDomeGroup(
           const dir = b3.clone().sub(a3)
           const len = dir.length()
           dir.normalize()
-          const pull = Math.min(endOffset, len * 0.33)
+          const pull = miterStruts ? 0 : Math.min(endOffset, len * 0.33)
           const aP = a3.clone().addScaledVector(dir, pull)
           const bP = b3.clone().addScaledVector(dir, -pull)
           const mid = a3.clone().add(b3).multiplyScalar(0.5)
@@ -193,11 +225,15 @@ export function buildDomeGroup(
           const radial = mid.clone().normalize()
           const zAxis = radial.clone().addScaledVector(dir, -dir.dot(radial)).normalize()
           const xAxis = new THREE.Vector3().crossVectors(dir, zAxis)
-          // Project each end's 4 corners along the strut axis onto the
-          // plane through the pulled-back end with the hub-axis normal.
-          const endCorners = (endPt: THREE.Vector3, axis: THREE.Vector3) => {
+          // Timber-plate: project each end's 4 corners along the strut axis
+          // onto the plane through the pulled-back end with the hub-axis
+          // normal. Mitered: cut each corner at the DEEPER of the two
+          // neighbor seam planes through the vertex.
+          const endCorners = (endPt: THREE.Vector3, vid: number, into: THREE.Vector3) => {
             const corners: THREE.Vector3[] = []
-            const denom = axis.dot(dir)
+            const planes = miterStruts
+              ? seamNormals(vid, eid).map((n) => ({ n, p: endPt }))
+              : [{ n: axisThree(vid), p: endPt }]
             for (const [sx, sz] of [
               [1, 1],
               [-1, 1],
@@ -208,14 +244,21 @@ export function buildDomeGroup(
                 .clone()
                 .addScaledVector(xAxis, sx * w2)
                 .addScaledVector(zAxis, sz * d2)
-              let tShift = Math.abs(denom) > 0.05 ? axis.dot(endPt.clone().sub(c0)) / denom : 0
-              tShift = Math.max(-section.width * 3, Math.min(section.width * 3, tShift))
-              corners.push(c0.addScaledVector(dir, tShift).add(explode))
+              let tCut = 0
+              for (const { n, p } of planes) {
+                const denom = n.dot(into)
+                if (Math.abs(denom) < 0.05) continue
+                const t = n.dot(p.clone().sub(c0)) / denom
+                tCut = miterStruts
+                  ? Math.max(tCut, Math.min(t, len * 0.45))
+                  : Math.max(-section.width * 3, Math.min(section.width * 3, t))
+              }
+              corners.push(c0.addScaledVector(into, tCut).add(explode))
             }
             return corners
           }
-          const A = endCorners(aP, axisThree(e.v0))
-          const B = endCorners(bP, axisThree(e.v1))
+          const A = endCorners(aP, e.v0, dir)
+          const B = endCorners(bP, e.v1, dir.clone().negate())
           const quad = (p0: THREE.Vector3, p1: THREE.Vector3, p2: THREE.Vector3, p3: THREE.Vector3) => {
             positions.push(p0.x, p0.y, p0.z, p1.x, p1.y, p1.z, p2.x, p2.y, p2.z)
             positions.push(p0.x, p0.y, p0.z, p2.x, p2.y, p2.z, p3.x, p3.y, p3.z)
@@ -514,7 +557,7 @@ export function buildDomeGroup(
     const keptVertices = model.vertices.filter((v) => !opts.doorway?.removedVertices.has(v.id))
     // In joint mode the spheres shrink into the joint geometry — they stay
     // as the raycast targets that carry the hub pick map.
-    const pickR = jointMode ? hubR * 0.55 : hubR
+    const pickR = jointMode ? hubR * (opts.jointId === 'mitered' ? 0.35 : 0.55) : hubR
     const mesh = new THREE.InstancedMesh(sphere, mat, keptVertices.length)
     mesh.name = 'hubs'
     const m = new THREE.Matrix4()
@@ -546,6 +589,7 @@ export function buildDomeGroup(
         obj.quaternion.setFromUnitVectors(UP, axis)
       }
       for (const v of keptVertices) {
+        if (opts.jointId === 'mitered') break
         const pos = toThree(v.position, radius)
         const explode =
           explodeDist > 0

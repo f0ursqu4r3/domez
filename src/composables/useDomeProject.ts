@@ -23,6 +23,7 @@ import { generateZome } from '@/engine/zome'
 import { diameterToWorking, IMPERIAL_INCREMENTS, METRIC_INCREMENTS } from '@/engine/units'
 import type { Fraction, Frequency, UnitSystem } from '@/engine/types'
 import { cutListCsv, hubsCsv, boardsCsv, openingsCsv, panelsCsv, miterCsv } from '@/engine/exports/csv'
+import { cutTemplatesSvg, boardDiagramsSvg } from '@/engine/exports/templates'
 import { domeObj } from '@/engine/exports/obj'
 import { fabricationSvg, hubLabelsSvg } from '@/engine/exports/svg'
 import { fabricationDxf } from '@/engine/exports/dxf'
@@ -729,6 +730,29 @@ const exporters = {
       `${fileStem.value}-miter-cuts.csv`,
       miterCsv(model.value, state.units, radius.value),
       'text/csv',
+    ),
+  cutTemplates: () =>
+    download(
+      `${fileStem.value}-cut-templates.svg`,
+      cutTemplatesSvg(model.value, cutList.value, {
+        units: state.units,
+        jointId: state.jointId,
+        endOffset: workingEndOffset.value,
+        radius: radius.value,
+        section: strutSectionWorking.value,
+        title: titleOf(),
+      }),
+      'image/svg+xml',
+    ),
+  boardDiagrams: () =>
+    download(
+      `${fileStem.value}-board-diagrams.svg`,
+      boardDiagramsSvg(packing.value, {
+        units: state.units,
+        title: titleOf(),
+        kerf: workingKerf.value,
+      }),
+      'image/svg+xml',
     ),
   svg: () =>
     download(

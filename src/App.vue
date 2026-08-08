@@ -12,6 +12,7 @@ import ParametersPanel from '@/components/panels/ParametersPanel.vue'
 import StrutsPanel from '@/components/panels/StrutsPanel.vue'
 import HubsPanel from '@/components/panels/HubsPanel.vue'
 import MaterialsPanel from '@/components/panels/MaterialsPanel.vue'
+import CostsPanel from '@/components/panels/CostsPanel.vue'
 import AssemblyPanel from '@/components/panels/AssemblyPanel.vue'
 import OpeningsPanel from '@/components/panels/OpeningsPanel.vue'
 import ExportPanel from '@/components/panels/ExportPanel.vue'
@@ -157,6 +158,7 @@ const chips = computed(() => [
             <TabsTrigger value="hubs" class="text-xs">Hubs</TabsTrigger>
             <TabsTrigger value="openings" class="text-xs">Openings</TabsTrigger>
             <TabsTrigger value="materials" class="text-xs">Materials</TabsTrigger>
+            <TabsTrigger value="costs" class="text-xs">Costs</TabsTrigger>
             <TabsTrigger value="assembly" class="text-xs">Assembly</TabsTrigger>
             <TabsTrigger value="export" class="text-xs">Export</TabsTrigger>
           </TabsList>
@@ -172,6 +174,9 @@ const chips = computed(() => [
           <TabsContent value="materials" class="min-h-0 flex-1"
             ><MaterialsPanel class="h-full"
           /></TabsContent>
+          <TabsContent value="costs" class="min-h-0 flex-1"
+            ><ScrollArea class="h-full"><CostsPanel /></ScrollArea
+          ></TabsContent>
           <TabsContent value="assembly" class="min-h-0 flex-1"
             ><ScrollArea class="h-full"><AssemblyPanel /></ScrollArea
           ></TabsContent>

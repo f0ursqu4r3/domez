@@ -1716,3 +1716,34 @@ describe('goldberg dual — full sphere and natural base', () => {
     for (const f of m.faces) expect(f.edgeIds.length).toBeLessThanOrEqual(3)
   })
 })
+
+describe('goldberg leveled base', () => {
+  const m = generateGoldberg({ frequency: 3, fraction: '1/2', baseMode: 'leveled' })
+
+  it('clips straddling polygons to a planar chord ring', () => {
+    const baseVerts = m.vertices.filter((v) => v.isBase)
+    expect(baseVerts.length).toBeGreaterThan(3)
+    for (const v of baseVerts) expect(v.position[2]).toBeCloseTo(m.cutZ, 9)
+    const ring = orderedBaseRing(m)
+    expect(ring.length).toBe(baseVerts.length)
+    const partials = m.polys!.filter((p) =>
+      p.vertexIds.some((vi) => Math.abs(m.vertices[vi].position[2] - m.cutZ) < 1e-9),
+    )
+    expect(partials.length).toBeGreaterThan(0)
+    // Corner-clipped hexagons can legitimately be 3-sided partials.
+    for (const p of partials) expect(p.vertexIds.length).toBeGreaterThanOrEqual(3)
+  })
+
+  it('takes a riser and keeps more coverage than natural', () => {
+    const riser = buildRiser(m, 150, {
+      height: 24,
+      studSpacing: 16,
+      memberWidth: 1.5,
+      minStubLength: 6,
+    })!
+    expect(riser).not.toBeNull()
+    expect(riser.segments.length).toBe(orderedBaseRing(m).length)
+    const nat = generateGoldberg({ frequency: 3, fraction: '1/2', baseMode: 'natural' })
+    expect(m.polys!.length).toBeGreaterThanOrEqual(nat.polys!.length)
+  })
+})

@@ -1314,14 +1314,18 @@ describe('miter cuts', () => {
   it('tilt tracks the axial angle and the zome apex is symmetric', () => {
     const m = generateDome({ frequency: 3, fraction: '1/2', baseMode: 'leveled' })
     const cuts = miterCuts(m)
-    for (const e of m.edges.slice(0, 20)) {
+    // Tight correlation at interior hubs only — base hubs have one-sided
+    // face fans that legitimately lean the axis outward.
+    let checked = 0
+    for (const e of m.edges) {
       const t = m.strutTypes[e.typeId]
       for (const end of cuts[e.id]) {
-        // Loose correlation band: tilt is measured against the face-normal
-        // axis, which leans outward at one-sided base hubs.
-        expect(Math.abs(end.tiltDeg - (90 - t.axialAngleDeg))).toBeLessThan(8)
+        if (m.vertices[end.vertexId].isBase) continue
+        expect(Math.abs(end.tiltDeg - (90 - t.axialAngleDeg))).toBeLessThan(2)
+        checked++
       }
     }
+    expect(checked).toBeGreaterThan(50)
     const z = generateZome({ sides: 8, pitchDeg: 45, rows: 3, baseMode: 'natural' })
     const zc = miterCuts(z)
     const apex = z.vertices.reduce((a, b) => (a.position[2] > b.position[2] ? a : b))

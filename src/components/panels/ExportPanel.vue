@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
 import { useDomeProject } from '@/composables/useDomeProject'
 import { Button } from '@/components/ui/button'
 import { Separator } from '@/components/ui/separator'
@@ -16,7 +16,7 @@ import {
 } from '@lucide/vue'
 
 const project = useDomeProject()
-const { exporters } = project
+const { state, exporters } = project
 const fileInput = ref<HTMLInputElement | null>(null)
 const loadError = ref(false)
 
@@ -27,7 +27,7 @@ async function onFile(ev: Event) {
   ;(ev.target as HTMLInputElement).value = ''
 }
 
-const groups = [
+const groups = computed(() => [
   {
     title: 'Fabrication',
     items: [
@@ -68,6 +68,16 @@ const groups = [
         icon: Tag,
         run: exporters.labelsSvg,
       },
+      ...(state.jointId === 'mitered'
+        ? [
+            {
+              label: 'Miter cuts CSV',
+              desc: 'per-end compound angles',
+              icon: FileSpreadsheet,
+              run: exporters.miterCsv,
+            },
+          ]
+        : []),
       { label: 'DXF', desc: 'strut templates + top plan', icon: FileCode, run: exporters.dxf },
     ],
   },
@@ -89,7 +99,7 @@ const groups = [
       },
     ],
   },
-]
+])
 </script>
 
 <template>

@@ -3,7 +3,7 @@ import type { DoorwayCut } from './doorway'
 import type { RiserModel } from './riser'
 import { roundToIncrement } from './units'
 
-export type JointMethodId = 'hub' | 'flattened-pipe' | 'timber-plate'
+export type JointMethodId = 'hub' | 'flattened-pipe' | 'timber-plate' | 'mitered'
 
 export interface JointMethod {
   id: JointMethodId
@@ -31,6 +31,12 @@ export const JOINT_METHODS: JointMethod[] = [
     label: 'Timber + hub plate',
     defaultEndOffset: 1.5,
     note: 'Cut length = chord − 2 × plate offset. Ends beveled at the axial angle so faces seat flush against the hub plate.',
+  },
+  {
+    id: 'mitered',
+    label: 'Mitered hubless',
+    defaultEndOffset: 0,
+    note: 'Struts run full chord to the vertex; each end is compound-cut against its neighbors (export the miter CSV) — glued/screwed seams, no hub hardware. Timber only.',
   },
 ]
 

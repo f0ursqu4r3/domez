@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { icosahedron } from '../icosahedron'
 import { subdivideIcosahedron } from '../subdivide'
 import { generateDome } from '../dome'
-import { buildCutList } from '../cutlist'
+import { buildCutList, JOINT_METHODS } from '../cutlist'
 import { packCuts } from '../packing'
 import { optimizeDiameter } from '../optimize'
 import { analyzeOpenings } from '../openings'
@@ -10,6 +10,7 @@ import { cutDoorways, optimizeDoorPlacement } from '../doorway'
 import { planPanels } from '../panels'
 import { buildRiser, orderedBaseRing } from '../riser'
 import { projectJson, parseProjectJson } from '../exports/json'
+import { miterCsv } from '../exports/csv'
 import { generateZome } from '../zome'
 import { hubAxes } from '../hubs'
 import { miterCuts } from '../miter'
@@ -1334,5 +1335,27 @@ describe('miter cuts', () => {
       .map((e) => zc[e.id][e.v0 === apex.id ? 0 : 1])
     expect(apexEnds.length).toBe(8)
     for (const end of apexEnds) expect(end.leftSeamDeg).toBeCloseTo(apexEnds[0].leftSeamDeg, 6)
+  })
+})
+
+describe('mitered joint method', () => {
+  it('is a registered joint method with zero end offset', () => {
+    const m = JOINT_METHODS.find((j) => j.id === 'mitered')!
+    expect(m).toBeDefined()
+    expect(m.defaultEndOffset).toBe(0)
+  })
+
+  it('miterCsv emits one row per strut end with sane angles', () => {
+    const model = generateDome({ frequency: 2, fraction: '1/2' })
+    const csv = miterCsv(model, 'imperial', 150)
+    const lines = csv.trim().split('\n')
+    expect(lines.length).toBe(1 + model.edges.length * 2)
+    for (const line of lines.slice(1)) {
+      const cols = line.split(',')
+      for (const deg of [cols[5], cols[6], cols[7]].map(Number)) {
+        expect(deg).toBeGreaterThanOrEqual(0)
+        expect(deg).toBeLessThanOrEqual(90)
+      }
+    }
   })
 })

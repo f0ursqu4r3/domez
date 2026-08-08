@@ -5,6 +5,7 @@ import type { PackingResult } from '../packing'
 import type { OpeningGroup } from '../openings'
 import type { DomeModel, UnitSystem } from '../types'
 import { formatLength } from '../units'
+import { miterCuts } from '../miter'
 
 const esc = (s: string | number) => {
   const str = String(s)
@@ -52,6 +53,45 @@ export function cutListCsv(cutList: CutList, units: UnitSystem): string {
   lines.push(row('Total struts', cutList.totalStruts))
   lines.push(row(`Total length (${unit})`, cutList.totalLength.toFixed(1)))
   lines.push(row(`Max rounding error (${unit})`, cutList.maxRoundingError.toFixed(4)))
+  return lines.join('\n')
+}
+
+/** Per-strut-END compound angles for the mitered hubless joint. */
+export function miterCsv(model: DomeModel, units: UnitSystem, radius: number): string {
+  const unit = units === 'imperial' ? 'in' : 'mm'
+  const cuts = miterCuts(model)
+  const lines = [
+    row(
+      'Edge',
+      'Strut type',
+      'End',
+      'Hub vertex',
+      'Hub type',
+      'Left seam (deg)',
+      'Right seam (deg)',
+      'Tilt (deg)',
+      `Chord (${unit})`,
+    ),
+  ]
+  for (const e of model.edges) {
+    const t = model.strutTypes[e.typeId]
+    cuts[e.id].forEach((end, i) => {
+      const hub = model.hubTypes[model.vertices[end.vertexId].hubTypeId]
+      lines.push(
+        row(
+          e.id,
+          t.label,
+          i === 0 ? 'v0' : 'v1',
+          end.vertexId,
+          hub.label,
+          end.leftSeamDeg.toFixed(2),
+          end.rightSeamDeg.toFixed(2),
+          end.tiltDeg.toFixed(2),
+          (e.chordFactor * radius).toFixed(3),
+        ),
+      )
+    })
+  }
   return lines.join('\n')
 }
 

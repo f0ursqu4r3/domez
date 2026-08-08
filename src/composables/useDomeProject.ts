@@ -22,7 +22,7 @@ import { buildRiser } from '@/engine/riser'
 import { generateZome } from '@/engine/zome'
 import { diameterToWorking, IMPERIAL_INCREMENTS, METRIC_INCREMENTS } from '@/engine/units'
 import type { Fraction, Frequency, UnitSystem } from '@/engine/types'
-import { cutListCsv, hubsCsv, boardsCsv, openingsCsv, panelsCsv } from '@/engine/exports/csv'
+import { cutListCsv, hubsCsv, boardsCsv, openingsCsv, panelsCsv, miterCsv } from '@/engine/exports/csv'
 import { domeObj } from '@/engine/exports/obj'
 import { fabricationSvg, hubLabelsSvg } from '@/engine/exports/svg'
 import { fabricationDxf } from '@/engine/exports/dxf'
@@ -724,6 +724,12 @@ const exporters = {
     ),
   panelsCsv: () =>
     download(`${fileStem.value}-panels.csv`, panelsCsv(panelPlan.value, state.units), 'text/csv'),
+  miterCsv: () =>
+    download(
+      `${fileStem.value}-miter-cuts.csv`,
+      miterCsv(model.value, state.units, radius.value),
+      'text/csv',
+    ),
   svg: () =>
     download(
       `${fileStem.value}-fabrication.svg`,

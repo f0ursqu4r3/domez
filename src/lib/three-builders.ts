@@ -234,6 +234,24 @@ export function buildDomeGroup(
             const planes = miterStruts
               ? seamNormals(vid, eid).map((n) => ({ n, p: endPt }))
               : [{ n: axisThree(vid), p: endPt }]
+            // Exact wedge ridge: where the two seam planes intersect, the
+            // end cap folds — two quads meeting on this line mate perfectly
+            // with the neighbor struts (a flat quad leaves a pinhole).
+            let ridge: [THREE.Vector3, THREE.Vector3] | null = null
+            if (miterStruts && planes.length === 2) {
+              const r = new THREE.Vector3().crossVectors(planes[0].n, planes[1].n)
+              if (r.lengthSq() > 1e-8) {
+                r.normalize()
+                const rz = r.dot(zAxis)
+                if (Math.abs(rz) > 0.1) {
+                  const sTop = Math.max(-len * 0.25, Math.min(len * 0.25, d2 / rz))
+                  ridge = [
+                    endPt.clone().addScaledVector(r, sTop).add(explode),
+                    endPt.clone().addScaledVector(r, -sTop).add(explode),
+                  ]
+                }
+              }
+            }
             for (const [sx, sz] of [
               [1, 1],
               [-1, 1],
@@ -244,18 +262,23 @@ export function buildDomeGroup(
                 .clone()
                 .addScaledVector(xAxis, sx * w2)
                 .addScaledVector(zAxis, sz * d2)
-              let tCut = 0
+              // Mitered: the corner sits where its ray exits BOTH neighbor
+              // half-spaces — negative t extends the member past the vertex
+              // so adjacent faces meet exactly on the seam plane (no gap).
+              let tCut = miterStruts ? -Infinity : 0
               for (const { n, p } of planes) {
                 const denom = n.dot(into)
                 if (Math.abs(denom) < 0.05) continue
                 const t = n.dot(p.clone().sub(c0)) / denom
                 tCut = miterStruts
-                  ? Math.max(tCut, Math.min(t, len * 0.45))
+                  ? Math.max(tCut, t)
                   : Math.max(-section.width * 3, Math.min(section.width * 3, t))
               }
+              if (!Number.isFinite(tCut)) tCut = 0
+              if (miterStruts) tCut = Math.max(-len * 0.2, Math.min(tCut, len * 0.45))
               corners.push(c0.addScaledVector(into, tCut).add(explode))
             }
-            return corners
+            return { corners, ridge }
           }
           const A = endCorners(aP, e.v0, dir)
           const B = endCorners(bP, e.v1, dir.clone().negate())
@@ -264,10 +287,21 @@ export function buildDomeGroup(
             positions.push(p0.x, p0.y, p0.z, p2.x, p2.y, p2.z, p3.x, p3.y, p3.z)
             faceMap.push(eid, eid)
           }
-          quad(A[0], A[3], A[2], A[1]) // end cap at v0
-          quad(B[0], B[1], B[2], B[3]) // end cap at v1
+          // End caps: folded along the seam ridge when it exists (mitered),
+          // flat otherwise. Corner order: 0(+w,+d) 1(−w,+d) 2(−w,−d) 3(+w,−d);
+          // the ridge runs from the +d face to the −d face between them.
+          const cap = (c: THREE.Vector3[], ridge: [THREE.Vector3, THREE.Vector3] | null) => {
+            if (ridge) {
+              quad(c[0], ridge[0], ridge[1], c[3])
+              quad(ridge[0], c[1], c[2], ridge[1])
+            } else {
+              quad(c[0], c[3], c[2], c[1])
+            }
+          }
+          cap(A.corners, A.ridge)
+          cap(B.corners, B.ridge)
           for (let i = 0; i < 4; i++) {
-            quad(A[i], B[i], B[(i + 1) % 4], A[(i + 1) % 4])
+            quad(A.corners[i], B.corners[i], B.corners[(i + 1) % 4], A.corners[(i + 1) % 4])
           }
         }
         const bgeo = new THREE.BufferGeometry()

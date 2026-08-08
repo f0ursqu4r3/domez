@@ -29,6 +29,8 @@ export interface ProjectSettings {
   }[]
   /** Skin panel mounting: outside | inside | both. */
   panelPlacement?: string
+  /** Riser (knee) wall height under the base ring, canonical mm. 0/absent = none. */
+  riserHeightMm?: number
 }
 
 /** Round-trippable project file: settings drive the app; derived data is

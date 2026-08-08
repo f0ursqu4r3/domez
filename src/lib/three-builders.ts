@@ -2,6 +2,7 @@ import * as THREE from 'three'
 import type { DomeModel } from '@/engine/types'
 import type { OpeningAssignments, OpeningType } from '@/engine/openings'
 import type { DoorwayCut } from '@/engine/doorway'
+import type { RiserModel } from '@/engine/riser'
 import { strutColor } from '@/engine/exports/svg'
 import type { ViewMode } from '@/composables/useDomeProject'
 
@@ -31,6 +32,8 @@ export interface BuildOptions {
   closeDoorways?: boolean
   /** Which strut face the skin panels mount to. Default 'outside'. */
   panelPlacement?: 'outside' | 'inside' | 'both'
+  /** Stud-framed riser wall under the base ring (world working-unit coords). */
+  riser?: RiserModel | null
 }
 
 export interface DomePickMaps {

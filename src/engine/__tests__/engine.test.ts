@@ -9,6 +9,7 @@ import { analyzeOpenings } from '../openings'
 import { cutDoorways, optimizeDoorPlacement } from '../doorway'
 import { planPanels } from '../panels'
 import { buildRiser, orderedBaseRing } from '../riser'
+import { projectJson, parseProjectJson } from '../exports/json'
 import { formatFeetInches, formatInchesFractional, roundToIncrement } from '../units'
 import { cross, dot, sub, add, length } from '../vec'
 
@@ -978,5 +979,35 @@ describe('riser sheathing rectangles in the panel plan', () => {
   it('is absent-safe: no rects option → empty array', () => {
     const a = planPanels(model, 150, { ...sheet, skinFactor: 1 })
     expect(a.rects).toEqual([])
+  })
+})
+
+describe('riser project settings', () => {
+  it('round-trips riserHeightMm through the project file', () => {
+    const model = generateDome({ frequency: 3, fraction: '1/2', baseMode: 'leveled' })
+    const cutList = buildCutList(model, {
+      radius: 150,
+      increment: 1 / 8,
+      endOffset: 0,
+      units: 'imperial',
+    })
+    const packing = packCuts(cutList, { kerf: 0, stock: [{ length: 144, label: '12 ft' }] })
+    const settings = {
+      frequency: 3,
+      fraction: '1/2',
+      baseMode: 'leveled',
+      diameter: 25,
+      units: 'imperial',
+      material: 'lumber-2x4',
+      jointMethod: 'timber-plate',
+      endOffset: 0,
+      increment: 1 / 8,
+      kerf: 0,
+      stock: [],
+      riserHeightMm: 610,
+    }
+    const text = projectJson(settings, model, cutList, packing)
+    const parsed = parseProjectJson(text)!
+    expect(parsed.riserHeightMm).toBe(610)
   })
 })

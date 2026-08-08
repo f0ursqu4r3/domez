@@ -18,6 +18,7 @@ import {
   type DoorSpec,
 } from '@/engine/doorway'
 import { planPanels } from '@/engine/panels'
+import { buildRiser } from '@/engine/riser'
 import { diameterToWorking, IMPERIAL_INCREMENTS, METRIC_INCREMENTS } from '@/engine/units'
 import type { Fraction, Frequency, UnitSystem } from '@/engine/types'
 import { cutListCsv, hubsCsv, boardsCsv, openingsCsv, panelsCsv } from '@/engine/exports/csv'
@@ -170,6 +171,9 @@ interface ProjectState {
   }[]
   /** Render the extruded-entry closure sealing the shell back to each buck. */
   closeDoorways: boolean
+  /** Stud-framed riser wall under the base ring, canonical mm (0 = none).
+   * Requires the leveled base — ignored under a natural (non-planar) ring. */
+  riserHeightMm: number
   /** Which face(s) of the frame the skin panels mount to. 'both' doubles
    * the panel material takeoff. */
   panelPlacement: 'outside' | 'inside' | 'both'
@@ -208,6 +212,7 @@ const state = reactive<ProjectState>({
   doors: [],
   framedWindows: [],
   closeDoorways: true,
+  riserHeightMm: 0,
   panelPlacement: 'outside',
   openingTool: 'off',
   highlightOpening: null,
@@ -241,6 +246,15 @@ const kerf = computed({
   get: () => round3(state.units === 'imperial' ? state.kerfMm / MM_PER_INCH : state.kerfMm),
   set: (v: number) => {
     if (v >= 0) state.kerfMm = state.units === 'imperial' ? v * MM_PER_INCH : v
+  },
+})
+
+/** Riser wall height in small display units (inches or mm). */
+const riserHeight = computed({
+  get: () =>
+    round3(state.units === 'imperial' ? state.riserHeightMm / MM_PER_INCH : state.riserHeightMm),
+  set: (v: number) => {
+    if (v >= 0) state.riserHeightMm = state.units === 'imperial' ? v * MM_PER_INCH : v
   },
 })
 
@@ -317,6 +331,15 @@ const workingKerf = computed(() =>
   state.units === 'imperial' ? state.kerfMm / MM_PER_INCH : state.kerfMm,
 )
 
+/** Riser height in working units — active only on a leveled, truncated base. */
+const workingRiserHeight = computed(() =>
+  state.baseMode === 'leveled' && state.fraction !== 'full' && state.riserHeightMm > 0
+    ? state.units === 'imperial'
+      ? state.riserHeightMm / MM_PER_INCH
+      : state.riserHeightMm
+    : 0,
+)
+
 const material = computed(() => MATERIALS.find((m) => m.id === state.materialId) ?? MATERIALS[0])
 const jointMethod = computed(
   () => JOINT_METHODS.find((j) => j.id === state.jointId) ?? JOINT_METHODS[0],
@@ -346,6 +369,7 @@ const cutList = computed(() =>
       units: state.units,
     },
     doorway.value,
+    riser.value,
   ),
 )
 
@@ -404,12 +428,32 @@ const doorway = computed(() =>
     : cutDoorways(model.value, portalSpecs.value, radius.value, {
         minStubLength: minStubLength.value,
         studSpacing: studSpacing.value,
+        riserHeight: workingRiserHeight.value,
       }),
 )
 
 /** Split doorway results for the UI: D* are doors, W* framed windows. */
 const doorInfos = computed(() => doorway.value.doors.filter((d) => d.id.startsWith('D')))
 const windowInfos = computed(() => doorway.value.doors.filter((d) => d.id.startsWith('W')))
+
+/** Stud spacing for the riser wall — a real wall, independent of closeDoorways. */
+const riserStudSpacing = computed(() => (state.units === 'imperial' ? 16 : 400))
+
+/** The stud-framed knee wall under the base ring; null when disabled. */
+const riser = computed(() =>
+  workingRiserHeight.value > 0
+    ? buildRiser(model.value, radius.value, {
+        height: workingRiserHeight.value,
+        studSpacing: riserStudSpacing.value,
+        memberWidth:
+          strutSectionWorking.value.kind === 'rect'
+            ? strutSectionWorking.value.width
+            : strutSectionWorking.value.diameter,
+        minStubLength: minStubLength.value,
+        doors: doorSpecs.value,
+      })
+    : null,
+)
 
 /** Standard sheet-good size for the skin panels. */
 const panelSheet = computed(() =>
@@ -429,6 +473,7 @@ const panelPlan = computed(() => {
     sheetLabel: panelSheet.value.label,
     excludeFaceIds: exclude,
     skinFactor: state.panelPlacement === 'both' ? 2 : 1,
+    rects: riser.value?.sheathingRects,
   })
 })
 
@@ -526,7 +571,7 @@ const summary = computed(() => {
   const m = model.value
   const r = radius.value
   return {
-    height: m.unitHeight * r,
+    height: m.unitHeight * r + workingRiserHeight.value,
     baseRadius: m.unitBaseRadius * r,
     floorArea: Math.PI * (m.unitBaseRadius * r) ** 2,
     struts: cutList.value.totalStruts,
@@ -551,6 +596,11 @@ function runOptimizer() {
       doors: doorSpecs.value,
       minStubLength: minStubLength.value,
       studSpacing: studSpacing.value,
+      riserHeight: workingRiserHeight.value,
+      riserMemberWidth:
+        strutSectionWorking.value.kind === 'rect'
+          ? strutSectionWorking.value.width
+          : strutSectionWorking.value.diameter,
     })
   } finally {
     state.optimizer.running = false
@@ -595,6 +645,7 @@ const projectSettings = computed(() => ({
   doors: state.doors.map((d) => ({ ...d })),
   windows: state.framedWindows.map((w) => ({ ...w })),
   panelPlacement: state.panelPlacement,
+  riserHeightMm: state.riserHeightMm,
 }))
 
 const exporters = {
@@ -649,6 +700,7 @@ const exporters = {
       doorway: doorway.value,
       closeDoorways: state.closeDoorways,
       panelPlacement: state.panelPlacement,
+      riser: riser.value,
     })
     const exporter = new GLTFExporter()
     const result = await exporter.parseAsync(group, { binary: true })
@@ -677,6 +729,10 @@ function loadProjectFile(text: string): boolean {
   endOffset.value = settings.endOffset
   kerf.value = settings.kerf
   state.increment = settings.increment
+  state.riserHeightMm =
+    typeof settings.riserHeightMm === 'number' && settings.riserHeightMm >= 0
+      ? settings.riserHeightMm
+      : 0
   // Restore openings after the sync model watcher has cleared them,
   // dropping any face ids or types that don't fit the loaded model.
   const openings: OpeningAssignments = {}
@@ -763,6 +819,7 @@ function persistedSlice() {
     doors: state.doors.map((d) => ({ ...d })),
     framedWindows: state.framedWindows.map((w) => ({ ...w })),
     closeDoorways: state.closeDoorways,
+    riserHeightMm: state.riserHeightMm,
     panelPlacement: state.panelPlacement,
     optimizerMin: state.optimizer.min,
     optimizerMax: state.optimizer.max,
@@ -806,6 +863,7 @@ function restorePersisted() {
     state.explode = num(p.explode, (n) => n >= 0 && n <= 1) ?? state.explode
     state.trueSize = !!p.trueSize
     state.closeDoorways = p.closeDoorways !== false
+    state.riserHeightMm = num(p.riserHeightMm, (n) => n >= 0) ?? state.riserHeightMm
     if (['outside', 'inside', 'both'].includes(p.panelPlacement as string)) {
       state.panelPlacement = p.panelPlacement as 'outside' | 'inside' | 'both'
     }
@@ -905,6 +963,7 @@ function resetProject() {
   state.doors = []
   state.framedWindows = []
   state.closeDoorways = true
+  state.riserHeightMm = 0
   state.panelPlacement = 'outside'
   state.openingTool = 'off'
   state.highlightOpening = null
@@ -943,6 +1002,9 @@ export function useDomeProject() {
     cutList,
     packing,
     assemblyPlan,
+    riser,
+    riserHeight,
+    workingRiserHeight,
     openingGroups,
     doorway,
     doorSpecs,

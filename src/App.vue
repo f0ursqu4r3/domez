@@ -80,8 +80,12 @@ const chips = computed(() => [
         <span
           class="rounded-md border border-primary/50 bg-primary/10 px-2.5 py-1 font-mono text-xs text-primary whitespace-nowrap"
         >
-          {{ state.frequency }}V · {{ state.fraction }} · ⌀ {{ diameter }}
-          {{ state.units === 'imperial' ? 'ft' : 'm' }}
+          {{
+            state.mode === 'zome'
+              ? `Z${state.zomeSides} · ${state.zomePitchDeg}°`
+              : `${state.frequency}V · ${state.fraction}`
+          }}
+          · ⌀ {{ diameter }} {{ state.units === 'imperial' ? 'ft' : 'm' }}
         </span>
         <span
           v-for="chip in chips"

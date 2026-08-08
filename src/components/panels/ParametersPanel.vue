@@ -39,6 +39,10 @@ const increment = computed({
   get: () => String(state.increment),
   set: (v: string) => (state.increment = Number(v)),
 })
+const zomeSides = computed({
+  get: () => String(state.zomeSides),
+  set: (v: string) => (state.zomeSides = Number(v)),
+})
 const best = computed(() => state.optimizer.result?.best ?? null)
 </script>
 
@@ -48,38 +52,115 @@ const best = computed(() => state.optimizer.result?.best ?? null)
       <h3 class="section-title">Geometry</h3>
       <FieldGroup class="gap-4">
         <Field>
-          <FieldLabel>Frequency</FieldLabel>
-          <ToggleGroup v-model="frequency" type="single" variant="outline" class="w-full">
-            <ToggleGroupItem
-              v-for="f in ['1', '2', '3', '4', '5', '6']"
-              :key="f"
-              :value="f"
-              class="flex-1 font-mono"
-            >
-              {{ f }}V
-            </ToggleGroupItem>
+          <FieldLabel>Structure</FieldLabel>
+          <ToggleGroup
+            :model-value="state.mode"
+            type="single"
+            variant="outline"
+            class="w-full"
+            @update:model-value="(v: any) => v && (state.mode = v)"
+          >
+            <ToggleGroupItem value="geodesic" class="flex-1 text-xs">Geodesic</ToggleGroupItem>
+            <ToggleGroupItem value="zome" class="flex-1 text-xs">Zome</ToggleGroupItem>
           </ToggleGroup>
-        </Field>
-        <Field>
-          <FieldLabel>Sphere fraction</FieldLabel>
-          <ToggleGroup v-model="fraction" type="single" variant="outline" class="w-full">
-            <ToggleGroupItem
-              v-for="fr in ['3/8', '1/2', '5/8']"
-              :key="fr"
-              :value="fr"
-              class="flex-1 font-mono"
-            >
-              {{ fr }}
-            </ToggleGroupItem>
-          </ToggleGroup>
-          <FieldDescription>
-            Snaps to the nearest clean ring — actual
-            <span class="font-mono text-foreground"
-              >{{ (project.summary.value.actualFraction * 100).toFixed(1) }}%</span
-            >
-            of sphere height.
+          <FieldDescription v-if="state.mode === 'zome'">
+            Every strut the same length, rhombic panels, profile you choose.
           </FieldDescription>
         </Field>
+        <template v-if="state.mode === 'geodesic'">
+          <Field>
+            <FieldLabel>Frequency</FieldLabel>
+            <ToggleGroup v-model="frequency" type="single" variant="outline" class="w-full">
+              <ToggleGroupItem
+                v-for="f in ['1', '2', '3', '4', '5', '6']"
+                :key="f"
+                :value="f"
+                class="flex-1 font-mono"
+              >
+                {{ f }}V
+              </ToggleGroupItem>
+            </ToggleGroup>
+          </Field>
+          <Field>
+            <FieldLabel>Sphere fraction</FieldLabel>
+            <ToggleGroup v-model="fraction" type="single" variant="outline" class="w-full">
+              <ToggleGroupItem
+                v-for="fr in ['3/8', '1/2', '5/8']"
+                :key="fr"
+                :value="fr"
+                class="flex-1 font-mono"
+              >
+                {{ fr }}
+              </ToggleGroupItem>
+            </ToggleGroup>
+            <FieldDescription>
+              Snaps to the nearest clean ring — actual
+              <span class="font-mono text-foreground"
+                >{{ (project.summary.value.actualFraction * 100).toFixed(1) }}%</span
+              >
+              of sphere height.
+            </FieldDescription>
+          </Field>
+        </template>
+        <template v-else>
+          <Field>
+            <FieldLabel>Sides</FieldLabel>
+            <Select v-model="zomeSides">
+              <SelectTrigger class="w-full font-mono"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectGroup>
+                  <SelectItem
+                    v-for="n in [4, 5, 6, 7, 8, 9, 10, 11, 12, 14, 16]"
+                    :key="n"
+                    :value="String(n)"
+                    class="font-mono"
+                  >
+                    {{ n }}
+                  </SelectItem>
+                </SelectGroup>
+              </SelectContent>
+            </Select>
+          </Field>
+          <div class="flex gap-3">
+            <Field class="flex-1">
+              <FieldLabel>Profile (°)</FieldLabel>
+              <Input
+                type="number"
+                min="20"
+                max="70"
+                step="1"
+                class="font-mono"
+                :model-value="state.zomePitchDeg"
+                @update:model-value="
+                  (v) => {
+                    const n = Number(v)
+                    if (n >= 20 && n <= 70) state.zomePitchDeg = n
+                  }
+                "
+              />
+            </Field>
+            <Field class="flex-1">
+              <FieldLabel>Rows</FieldLabel>
+              <Input
+                type="number"
+                min="1"
+                :max="state.zomeSides - 2"
+                step="1"
+                class="font-mono"
+                :model-value="state.zomeRows"
+                @update:model-value="
+                  (v) => {
+                    const n = Math.round(Number(v))
+                    if (n >= 1) state.zomeRows = Math.min(state.zomeSides - 2, n)
+                  }
+                "
+              />
+            </Field>
+          </div>
+          <FieldDescription class="-mt-2">
+            Low profile = tall bullet, high = squat onion. Rows = rhombus bands from the apex.
+          </FieldDescription>
+        </template>
         <Field orientation="horizontal">
           <FieldLabel class="flex-1">Leveled base ring</FieldLabel>
           <Switch
@@ -87,6 +168,13 @@ const best = computed(() => state.optimizer.result?.best ?? null)
             @update:model-value="(v: boolean) => (state.baseMode = v ? 'leveled' : 'natural')"
           />
         </Field>
+        <FieldDescription v-if="state.mode === 'zome'" class="-mt-3">
+          {{
+            state.baseMode === 'leveled'
+              ? 'Zigzag rim filled with half-rhombi — flat ring, one extra strut type.'
+              : 'Pure zigzag rim — every strut identical.'
+          }}
+        </FieldDescription>
         <Field>
           <FieldLabel
             >Riser wall <span class="text-muted-foreground">({{ smallUnit }})</span></FieldLabel

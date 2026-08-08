@@ -109,6 +109,20 @@ const stats = computed(() => [
             {{ t.seamed ? `seamed · ${t.sheets} sh` : `${t.perSheet}/sh · ${t.sheets} sh` }}
           </span>
         </div>
+        <div
+          v-for="t in panelPlan.rhombs"
+          :key="t.label"
+          class="flex items-baseline gap-2 font-mono text-[11px]"
+        >
+          <span class="font-semibold w-7">{{ t.label }}</span>
+          <span>×{{ t.count }}</span>
+          <span class="text-muted-foreground truncate">
+            rhombus {{ t.d1.toFixed(1) }} × {{ t.d2.toFixed(1) }} · {{ panelAreaText(t.area) }}
+          </span>
+          <span class="ml-auto whitespace-nowrap">
+            {{ t.seamed ? `seamed · ${t.sheets} sh` : `${t.perSheet}/sh · ${t.sheets} sh` }}
+          </span>
+        </div>
       </div>
 
       <h4 class="text-xs uppercase tracking-widest text-muted-foreground">Cutting diagrams</h4>

@@ -6,6 +6,7 @@ import type { OpeningGroup } from '../openings'
 import type { DomeModel, UnitSystem } from '../types'
 import { formatLength } from '../units'
 import { miterCuts } from '../miter'
+import type { CostEstimate } from '../bom'
 
 const esc = (s: string | number) => {
   const str = String(s)
@@ -188,6 +189,25 @@ export function panelsCsv(plan: PanelPlan, units: UnitSystem): string {
   lines.push(row('Total panels', plan.totalPanels))
   lines.push(row(`Total sheets (${plan.sheetLabel})`, plan.totalSheets))
   lines.push(row('Sheet waste', `${(plan.wasteFraction * 100).toFixed(1)}%`))
+  return lines.join('\n')
+}
+
+export function costsCsv(est: CostEstimate, currency: string): string {
+  const lines = [row('Item', 'Qty', `Unit price (${currency})`, `Line total (${currency})`, 'Note')]
+  for (const l of est.lines) {
+    lines.push(
+      row(
+        l.label,
+        l.quantity,
+        l.unpriced ? 'unpriced' : l.priceEach.toFixed(2),
+        l.unpriced ? '' : l.total.toFixed(2),
+        l.note ?? '',
+      ),
+    )
+  }
+  lines.push('')
+  lines.push(row(`Total (${currency})`, est.total.toFixed(2)))
+  lines.push(row('Unpriced lines', est.unpricedCount))
   return lines.join('\n')
 }
 

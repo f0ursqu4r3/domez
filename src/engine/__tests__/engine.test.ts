@@ -13,6 +13,7 @@ import { projectJson, parseProjectJson } from '../exports/json'
 import { miterCsv } from '../exports/csv'
 import { cutTemplatesSvg, boardDiagramsSvg } from '../exports/templates'
 import { buildBom, estimateCost, defaultPrice } from '../bom'
+import { costsCsv } from '../exports/csv'
 import { generateZome } from '../zome'
 import { hubAxes } from '../hubs'
 import { miterCuts } from '../miter'
@@ -1555,5 +1556,31 @@ describe('cost estimate', () => {
     const glue = est.lines.find((l) => l.key === 'glue-seam')!
     expect(glue.total).toBe(0)
     expect(glue.unpriced).toBe(false)
+  })
+})
+
+describe('costs csv', () => {
+  it('emits lines and totals with the currency symbol', () => {
+    const model = generateDome({ frequency: 2, fraction: '1/2' })
+    const plan = planPanels(model, 150, {
+      sheetW: 48,
+      sheetL: 96,
+      sheetLabel: '4×8 ft sheet',
+      skinFactor: 1,
+    })
+    const bom = buildBom(model, emptyDoorwayCut(), null, 'hub', plan)
+    const est = estimateCost({
+      boardCounts: [{ stockLabel: '8 ft', count: 10 }],
+      totalSheets: plan.totalSheets,
+      sheetLabel: plan.sheetLabel,
+      bom,
+      prices: {},
+      floorArea: 1e5,
+      units: 'imperial',
+    })
+    const csv = costsCsv(est, '$')
+    expect(csv).toContain('Unit price ($)')
+    expect(csv).toContain('Total ($)')
+    expect(csv.split('\n').length).toBeGreaterThan(est.lines.length)
   })
 })

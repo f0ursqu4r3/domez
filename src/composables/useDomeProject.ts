@@ -19,10 +19,11 @@ import {
 } from '@/engine/doorway'
 import { planPanels } from '@/engine/panels'
 import { buildRiser } from '@/engine/riser'
+import { buildBom, estimateCost } from '@/engine/bom'
 import { generateZome } from '@/engine/zome'
 import { diameterToWorking, IMPERIAL_INCREMENTS, METRIC_INCREMENTS } from '@/engine/units'
 import type { Fraction, Frequency, UnitSystem } from '@/engine/types'
-import { cutListCsv, hubsCsv, boardsCsv, openingsCsv, panelsCsv, miterCsv } from '@/engine/exports/csv'
+import { cutListCsv, hubsCsv, boardsCsv, openingsCsv, panelsCsv, miterCsv, costsCsv } from '@/engine/exports/csv'
 import { cutTemplatesSvg, boardDiagramsSvg } from '@/engine/exports/templates'
 import { domeObj } from '@/engine/exports/obj'
 import { fabricationSvg, hubLabelsSvg } from '@/engine/exports/svg'
@@ -193,6 +194,10 @@ interface ProjectState {
   /** Active viewer tool. 'door' places a doorway at the clicked azimuth;
    * window/vent paint panels; 'off' restores strut/hub picking. */
   openingTool: 'off' | OpeningType | 'erase'
+  /** Sparse price-book overrides by key; defaults live in the engine. */
+  prices: Record<string, number>
+  /** Currency symbol for cost display (max 3 chars). */
+  currency: string
   /** Opening group label to highlight in the viewer (from the Openings panel). */
   highlightOpening: string | null
   selection: Selection
@@ -232,6 +237,8 @@ const state = reactive<ProjectState>({
   riserHeightMm: 0,
   panelPlacement: 'outside',
   openingTool: 'off',
+  prices: {},
+  currency: '$',
   highlightOpening: null,
   selection: null,
   viewResetToken: 0,
@@ -637,6 +644,34 @@ const summary = computed(() => {
   }
 })
 
+/** Hardware bill of materials for the current build. */
+const bom = computed(() =>
+  buildBom(model.value, doorway.value, riser.value, state.jointId, panelPlan.value),
+)
+
+/** Priced build estimate through the editable price book. */
+const costEstimate = computed(() =>
+  estimateCost({
+    boardCounts: packing.value.boardCounts,
+    totalSheets: panelPlan.value.totalSheets,
+    sheetLabel: panelSheet.value.label,
+    bom: bom.value,
+    prices: state.prices,
+    floorArea: summary.value.floorArea,
+    units: state.units,
+  }),
+)
+
+/** Write (or clear, when ≤ 0) a price-book override. */
+function setPrice(key: string, value: number) {
+  if (Number.isFinite(value) && value > 0) state.prices[key] = value
+  else delete state.prices[key]
+}
+
+function resetPrices() {
+  state.prices = {}
+}
+
 function runOptimizer() {
   state.optimizer.running = true
   try {
@@ -709,6 +744,8 @@ const projectSettings = computed(() => ({
   zomeSides: state.zomeSides,
   zomePitchDeg: state.zomePitchDeg,
   zomeRows: state.zomeRows,
+  prices: { ...state.prices },
+  currency: state.currency,
 }))
 
 const exporters = {
@@ -743,6 +780,12 @@ const exporters = {
         title: titleOf(),
       }),
       'image/svg+xml',
+    ),
+  costsCsv: () =>
+    download(
+      `${fileStem.value}-costs.csv`,
+      costsCsv(costEstimate.value, state.currency),
+      'text/csv',
     ),
   boardDiagrams: () =>
     download(
@@ -842,6 +885,16 @@ function loadProjectFile(text: string): boolean {
     typeof settings.riserHeightMm === 'number' && settings.riserHeightMm >= 0
       ? settings.riserHeightMm
       : 0
+  state.prices = {}
+  if (settings.prices && typeof settings.prices === 'object') {
+    for (const [k, v] of Object.entries(settings.prices)) {
+      if (typeof v === 'number' && Number.isFinite(v) && v > 0) state.prices[k] = v
+    }
+  }
+  state.currency =
+    typeof settings.currency === 'string' && settings.currency.length > 0
+      ? settings.currency.slice(0, 3)
+      : '$'
   // Restore openings after the sync model watcher has cleared them,
   // dropping any face ids or types that don't fit the loaded model.
   const openings: OpeningAssignments = {}
@@ -933,6 +986,8 @@ function persistedSlice() {
     framedWindows: state.framedWindows.map((w) => ({ ...w })),
     closeDoorways: state.closeDoorways,
     riserHeightMm: state.riserHeightMm,
+    prices: { ...state.prices },
+    currency: state.currency,
     panelPlacement: state.panelPlacement,
     optimizerMin: state.optimizer.min,
     optimizerMax: state.optimizer.max,
@@ -983,6 +1038,16 @@ function restorePersisted() {
     state.zomePitchDeg = num(p.zomePitchDeg, (v) => v >= 20 && v <= 70) ?? state.zomePitchDeg
     const zr = num(p.zomeRows, (v) => v >= 1)
     if (zr !== undefined) state.zomeRows = Math.max(1, Math.min(state.zomeSides - 2, Math.round(zr)))
+    if (p.prices && typeof p.prices === 'object') {
+      const prices: Record<string, number> = {}
+      for (const [k, v] of Object.entries(p.prices as Record<string, unknown>)) {
+        if (typeof v === 'number' && Number.isFinite(v) && v > 0) prices[k] = v
+      }
+      state.prices = prices
+    }
+    if (typeof p.currency === 'string' && p.currency.length > 0) {
+      state.currency = p.currency.slice(0, 3)
+    }
     if (['outside', 'inside', 'both'].includes(p.panelPlacement as string)) {
       state.panelPlacement = p.panelPlacement as 'outside' | 'inside' | 'both'
     }
@@ -1089,6 +1154,8 @@ function resetProject() {
   state.riserHeightMm = 0
   state.panelPlacement = 'outside'
   state.openingTool = 'off'
+  state.prices = {}
+  state.currency = '$'
   state.highlightOpening = null
   state.selection = null
   state.optimizer.min = 20
@@ -1129,6 +1196,10 @@ export function useDomeProject() {
     riser,
     riserHeight,
     workingRiserHeight,
+    bom,
+    costEstimate,
+    setPrice,
+    resetPrices,
     openingGroups,
     doorway,
     doorSpecs,

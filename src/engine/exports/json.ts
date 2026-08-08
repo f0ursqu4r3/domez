@@ -37,6 +37,9 @@ export interface ProjectSettings {
   zomeSides?: number
   zomePitchDeg?: number
   zomeRows?: number
+  /** Price-book overrides by key (sparse) and currency symbol. */
+  prices?: Record<string, number>
+  currency?: string
 }
 
 /** Round-trippable project file: settings drive the app; derived data is

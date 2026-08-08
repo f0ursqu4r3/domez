@@ -766,3 +766,62 @@ describe('riser wall', () => {
     expect(buildRiser(full, radius, opts)).toBeNull()
   })
 })
+
+describe('riser wall — door openings', () => {
+  const model = generateDome({ frequency: 3, fraction: '1/2', baseMode: 'leveled' })
+  const radius = 150
+  const base = { height: 24, studSpacing: 16, memberWidth: 1.5, minStubLength: 6 }
+  const door = { id: 'D1', azimuthDeg: 0, width: 48, height: 90 }
+
+  it('cuts the door span out of both plates and adds king/trimmer studs', () => {
+    const riser = buildRiser(model, radius, { ...base, doors: [door] })!
+    const withOpenings = riser.segments.filter((s) => s.openings.length > 0)
+    expect(withOpenings.length).toBeGreaterThan(0)
+    const totalOpening = riser.segments
+      .flatMap((s) => s.openings)
+      .reduce((n, [d0, d1]) => n + (d1 - d0), 0)
+    // The ring is polygonal, so the opening chord ≈ door width (within tolerance).
+    expect(totalOpening).toBeGreaterThan(door.width * 0.95)
+    expect(totalOpening).toBeLessThan(door.width * 1.3)
+    expect(riser.members.some((m) => m.part === 'riser trimmer')).toBe(true)
+    expect(riser.members.some((m) => m.part === 'riser king stud')).toBe(true)
+    // No plate piece crosses an opening.
+    for (const seg of riser.segments) {
+      for (const [d0, d1] of seg.openings) {
+        const dx = (seg.b[0] - seg.a[0]) / seg.length
+        const dy = (seg.b[1] - seg.a[1]) / seg.length
+        for (const m of riser.members) {
+          if (m.part !== 'riser top plate' && m.part !== 'riser bottom plate') continue
+          const pa = (m.a[0] - seg.a[0]) * dx + (m.a[1] - seg.a[1]) * dy
+          const pb = (m.b[0] - seg.a[0]) * dx + (m.b[1] - seg.a[1]) * dy
+          const onSeg =
+            Math.min(pa, pb) > -1e-6 &&
+            Math.max(pa, pb) < seg.length + 1e-6 &&
+            Math.abs((m.a[0] - seg.a[0]) * dy - (m.a[1] - seg.a[1]) * dx) < 1e-6
+          if (!onSeg) continue
+          const overlap = Math.min(Math.max(pa, pb), d1) - Math.max(Math.min(pa, pb), d0)
+          expect(overlap).toBeLessThan(1e-6)
+        }
+      }
+    }
+  })
+
+  it('drops field studs inside the opening and subtracts opening sheathing', () => {
+    const cut = buildRiser(model, radius, { ...base, doors: [door] })!
+    const plain = buildRiser(model, radius, base)!
+    expect(cut.openingArea).toBeGreaterThan(0)
+    expect(cut.netSheathingArea).toBeCloseTo(cut.grossSheathingArea - cut.openingArea, 4)
+    const fieldStuds = (r: NonNullable<ReturnType<typeof buildRiser>>) =>
+      r.members.filter((m) => m.part === 'riser stud').length
+    expect(fieldStuds(cut)).toBeLessThanOrEqual(fieldStuds(plain))
+  })
+
+  it('ignores windows and handles doors on the far side', () => {
+    const win = { id: 'W1', azimuthDeg: 0, width: 36, height: 36, sillHeight: 60 }
+    const far = { id: 'D9', azimuthDeg: 180, width: 48, height: 90 }
+    const riser = buildRiser(model, radius, { ...base, doors: [win] })!
+    expect(riser.openingArea).toBe(0)
+    const riserFar = buildRiser(model, radius, { ...base, doors: [far, door] })!
+    expect(riserFar.segments.filter((s) => s.openings.length > 0).length).toBeGreaterThanOrEqual(2)
+  })
+})

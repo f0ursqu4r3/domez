@@ -825,3 +825,59 @@ describe('riser wall — door openings', () => {
     expect(riserFar.segments.filter((s) => s.openings.length > 0).length).toBeGreaterThanOrEqual(2)
   })
 })
+
+describe('portals over a riser wall', () => {
+  const model = generateDome({ frequency: 3, fraction: '1/2', baseMode: 'leveled' })
+  const radius = 150
+  const opts = { minStubLength: 6, riserHeight: 24 }
+  const door = { id: 'D1', azimuthDeg: 0, width: 48, height: 90 }
+
+  it('shrinks the shell cut to the part above the base plane', () => {
+    const withRiser = cutDoorways(model, [door], radius, opts)
+    const without = cutDoorways(model, [{ ...door, height: door.height - 24 }], radius, {
+      minStubLength: 6,
+    })
+    // A 90″ door over a 24″ riser cuts the shell exactly like a 66″ door on the ground.
+    expect(withRiser.removedEdges.size).toBe(without.removedEdges.size)
+    expect(withRiser.trimmed.length).toBe(without.trimmed.length)
+    const info = withRiser.doors[0]
+    expect(info.buckBottomRel).toBeCloseTo(-24, 9)
+    expect(info.buckTopRel).toBeCloseTo(66, 9)
+    expect(info.jambLength).toBeCloseTo(90, 9) // full height through the riser
+    expect(info.riserConflict).toBe(false)
+  })
+
+  it('flags a door not taller than the riser', () => {
+    const stub = cutDoorways(model, [{ ...door, height: 20 }], radius, opts)
+    expect(stub.doors[0].riserConflict).toBe(true)
+    expect(stub.doors[0].fits).toBe(false)
+    expect(stub.removedEdges.size).toBe(0)
+    expect(stub.trimmed.length).toBe(0)
+  })
+
+  it('windows: sill measured from the floor, conflict when it dips into the riser', () => {
+    const win = { id: 'W1', azimuthDeg: 0, width: 36, height: 36, sillHeight: 60, margin: 2 }
+    const cut = cutDoorways(model, [win], radius, opts)
+    const info = cut.doors[0]
+    expect(info.buckBottomRel).toBeCloseTo(36, 9) // 60 − 24 above the base plane
+    expect(info.riserConflict).toBe(false)
+    // Same shell cut as a no-riser window with sill 36.
+    const equiv = cutDoorways(model, [{ ...win, sillHeight: 36 }], radius, { minStubLength: 6 })
+    expect(cut.removedEdges.size).toBe(equiv.removedEdges.size)
+    expect(cut.trimmed.length).toBe(equiv.trimmed.length)
+    // Sill inside the riser band (incl. margin) conflicts.
+    const low = cutDoorways(model, [{ ...win, sillHeight: 25 }], radius, opts)
+    expect(low.doors[0].riserConflict).toBe(true)
+    expect(low.doors[0].fits).toBe(false)
+  })
+
+  it('riserHeight 0 or omitted is identical to today', () => {
+    const a = cutDoorways(model, [door], radius, { minStubLength: 6 })
+    const b = cutDoorways(model, [door], radius, { minStubLength: 6, riserHeight: 0 })
+    expect(b.doors[0].buckBottomRel).toBe(0)
+    expect(b.doors[0].buckTopRel).toBeCloseTo(door.height, 12)
+    expect(a.removedEdges.size).toBe(b.removedEdges.size)
+    expect(a.trimmed.length).toBe(b.trimmed.length)
+    expect(a.doors[0].closureSideArea).toBeCloseTo(b.doors[0].closureSideArea, 9)
+  })
+})

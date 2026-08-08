@@ -89,6 +89,15 @@ export interface DoorFrameInfo extends DoorSpec {
   tunnelDepth: number
   /** False when the rectangle does not fit inside the shell (too tall/wide). */
   fits: boolean
+  /** Opening bottom relative to the BASE plane; negative when the riser
+   * drops the floor below it. Equals sillHeight (or 0) when no riser. */
+  buckBottomRel: number
+  /** Opening top relative to the base plane: buckBottomRel + height. */
+  buckTopRel: number
+  /** True when the riser makes the portal unbuildable (door not taller than
+   * the riser; window sill inside the riser band incl. margin). Forces
+   * fits = false. */
+  riserConflict: boolean
   removedStrutCount: number
   trimmedStrutCount: number
   removedHubCount: number
@@ -128,6 +137,10 @@ export interface DoorwayOptions {
   /** Closure framing stud spacing (16″ / 400 mm o.c.). 0 or omitted skips
    * closure framing entirely (e.g. when the closure is toggled off). */
   studSpacing?: number
+  /** Riser (knee) wall height under the base ring, working units. When set,
+   * portal dimensions are FLOOR-referenced: a door's height spans from the
+   * foundation, a window's sill is measured above the foundation. */
+  riserHeight?: number
 }
 
 export interface PlacementStats {
@@ -401,13 +414,22 @@ export function cutDoorways(
     const extraDepth = spec.extraDepth ?? 0
     const halfBuck = spec.width / 2
     const sill = Math.max(0, spec.sillHeight ?? 0)
-    const zBotAbs = z0 + sill
-    const zTopAbs = z0 + sill + spec.height
+    const riser = Math.max(0, opts.riserHeight ?? 0)
+    const isWindow = sill > 0
+    // Portal dims are floor-referenced; the shell works from the base plane.
+    const buckBottomRel = (isWindow ? sill : 0) - riser
+    const buckTopRel = buckBottomRel + spec.height
+    const riserConflict =
+      riser > 0 && (isWindow ? buckBottomRel - margin < 0 : buckTopRel <= 0)
+    // The part of the buck below the base plane sits in the riser wall, not
+    // the shell — only the above-base corners constrain the sphere.
+    const zBotAbs = z0 + Math.max(0, buckBottomRel)
+    const zTopAbs = z0 + buckTopRel
 
     // All four buck corners must fit inside the sphere.
     const fitSq =
       radius * radius - Math.max(zTopAbs * zTopAbs, zBotAbs * zBotAbs) - halfBuck * halfBuck
-    const fits = fitSq > 0
+    const fits = fitSq > 0 && !riserConflict
     // Auto fit puts the buck corners on the sphere. Positive extra depth
     // recesses the buck (clamped clear of the dome center); negative pushes
     // it outward — past the base ring the entry becomes a projecting
@@ -416,9 +438,10 @@ export function cutDoorways(
 
     const halfEnv = halfBuck + margin
     /** Envelope vertical bounds relative to the base plane. Doors sit on the
-     * ground; framed windows float, with margin cut above AND below. */
-    const zLowRel = sill > 0 ? Math.max(0, sill - margin) : 0
-    const zHighRel = sill + spec.height + margin
+     * ground (or pass through the riser); framed windows float, with margin
+     * cut above AND below. */
+    const zLowRel = isWindow ? Math.max(0, buckBottomRel - margin) : 0
+    const zHighRel = buckTopRel + margin
     const zTopEnv = z0 + zHighRel
     const zLowEnv = z0 + zLowRel
 
@@ -472,7 +495,7 @@ export function cutDoorways(
         )
       }
       const top = planeProfile(zTopEnv)
-      const bottom = sill > 0 ? planeProfile(zLowEnv) : []
+      const bottom = isWindow ? planeProfile(zLowEnv) : []
 
       closureProfile = {
         halfWidth: halfEnv,
@@ -497,7 +520,7 @@ export function cutDoorways(
           1e9,
         )
       closureTopArea = planeArea(top)
-      closureBottomArea = sill > 0 ? planeArea(bottom) : 0
+      closureBottomArea = isWindow ? planeArea(bottom) : 0
 
       // ---- Closure framing on the faceted profiles ----
       const spacing = opts.studSpacing ?? 0
@@ -635,7 +658,7 @@ export function cutDoorways(
           }
         }
         planeMembers(top, 'top blocking', 'top edge')
-        if (sill > 0) planeMembers(bottom, 'sill blocking', 'sill edge')
+        if (isWindow) planeMembers(bottom, 'sill blocking', 'sill edge')
       }
     }
 
@@ -648,10 +671,10 @@ export function cutDoorways(
       joints.add(jkey(m.side, m.b[0], m.b[1]))
     }
     if (fits) {
-      joints.add(jkey(9, -halfBuck, sill))
-      joints.add(jkey(9, halfBuck, sill))
-      joints.add(jkey(9, -halfBuck, sill + spec.height))
-      joints.add(jkey(9, halfBuck, sill + spec.height))
+      joints.add(jkey(9, -halfBuck, buckBottomRel))
+      joints.add(jkey(9, halfBuck, buckBottomRel))
+      joints.add(jkey(9, -halfBuck, buckTopRel))
+      joints.add(jkey(9, halfBuck, buckTopRel))
     }
 
     perDoor.set(spec.id, {
@@ -661,6 +684,9 @@ export function cutDoorways(
       framePlaneDist,
       tunnelDepth: rBase - framePlaneDist,
       fits,
+      buckBottomRel,
+      buckTopRel,
+      riserConflict,
       removedStrutCount: 0,
       trimmedStrutCount: 0,
       removedHubCount: 0,
@@ -669,22 +695,28 @@ export function cutDoorways(
       closureSideArea,
       closureTopArea,
       closureBottomArea,
-      closureFaceArea: fits ? 2 * halfEnv * (zHighRel - zLowRel) - spec.width * spec.height : 0,
+      closureFaceArea: fits
+        ? 2 * halfEnv * (zHighRel - zLowRel) -
+          spec.width * Math.max(0, Math.min(buckTopRel, zHighRel) - Math.max(buckBottomRel, zLowRel))
+        : 0,
       closureFraming,
       closureJointCount: joints.size,
       closureProfile,
     })
 
-    frames.push({
-      spec,
-      ux,
-      uy,
-      z0,
-      halfWidth: halfEnv,
-      zClipLow: sill > 0 ? zLowRel : -1e9,
-      zClipHigh: zHighRel,
-      cutPlaneDist: fits ? Math.min(framePlaneDist, Math.sqrt(fitSq)) : framePlaneDist,
-    })
+    // A riser-conflicted portal cuts nothing.
+    if (!riserConflict) {
+      frames.push({
+        spec,
+        ux,
+        uy,
+        z0,
+        halfWidth: halfEnv,
+        zClipLow: isWindow ? zLowRel : -1e9,
+        zClipHigh: zHighRel,
+        cutPlaneDist: fits ? Math.min(framePlaneDist, Math.sqrt(fitSq)) : framePlaneDist,
+      })
+    }
   }
 
   // ---- Struts: clip each edge against every door passage ----
@@ -802,7 +834,10 @@ function placementStats(
   radius: number,
   opts: PlacementOptions,
 ): PlacementStats {
-  const cut = cutDoorways(model, [spec], radius, { minStubLength: opts.minStubLength })
+  const cut = cutDoorways(model, [spec], radius, {
+    minStubLength: opts.minStubLength,
+    riserHeight: opts.riserHeight,
+  })
   const info = cut.doors[0]
   const distinct = new Set(
     cut.trimmed.map((t) => Math.round(t.length / Math.max(opts.increment, 1e-9))),
@@ -816,7 +851,8 @@ function placementStats(
   const ux = Math.cos(az)
   const uy = Math.sin(az)
   const z0 = model.cutZ * radius
-  const sillZone = Math.max(0, spec.sillHeight ?? 0)
+  // Zone heights are shell-relative: shift a floor-referenced sill down by the riser.
+  const sillZone = Math.max(0, (spec.sillHeight ?? 0) - (opts.riserHeight ?? 0))
   const inZone = (x: number, y: number, z: number) => {
     const u = ux * x + uy * y
     const t = -uy * x + ux * y

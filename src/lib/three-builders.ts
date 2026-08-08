@@ -213,90 +213,85 @@ export function buildDomeGroup(
         door.width + 2 * memberW, memberW, memberD,
       )
 
-      // ---- Extruded-entry closure: seal the shell back to the buck ----
-      if (opts.closeDoorways !== false) {
-        const zTop = z0 + door.height
+      // ---- Extruded-entry closure, following the faceted shell ----
+      const profile = door.closureProfile
+      if (opts.closeDoorways !== false && profile) {
+        const halfEnv = profile.halfWidth
         const positions: number[] = []
-        const pushQuadStrip = (
-          inner: (s: number) => THREE.Vector3,
-          outer: (s: number) => THREE.Vector3,
-          segments: number,
-        ) => {
-          for (let i = 0; i < segments; i++) {
-            const s0 = i / segments
-            const s1 = (i + 1) / segments
-            const a0 = inner(s0)
-            const a1 = inner(s1)
-            const b0 = outer(s0)
-            const b1 = outer(s1)
-            positions.push(a0.x, a0.y, a0.z, b0.x, b0.y, b0.z, b1.x, b1.y, b1.z)
-            positions.push(a0.x, a0.y, a0.z, b1.x, b1.y, b1.z, a1.x, a1.y, a1.z)
+        // Door-local (radial, tangential, height above base) -> world.
+        const P = (ur: number, t: number, h: number) =>
+          u.clone().multiplyScalar(ur).addScaledVector(tv, t).setY(z0 + h)
+        const quad = (a: THREE.Vector3, b: THREE.Vector3, c: THREE.Vector3, d: THREE.Vector3) => {
+          positions.push(a.x, a.y, a.z, b.x, b.y, b.z, c.x, c.y, c.z)
+          positions.push(a.x, a.y, a.z, c.x, c.y, c.z, d.x, d.y, d.z)
+        }
+        // Side walls: faceted profile down to the base plane.
+        for (const [side, wall] of [
+          [1, profile.wallPos],
+          [-1, profile.wallNeg],
+        ] as const) {
+          const t = side * halfEnv
+          for (let i = 1; i < wall.length; i++) {
+            const [u0, h0] = wall[i - 1]
+            const [u1, h1] = wall[i]
+            if (h0 <= 1e-6 && h1 <= 1e-6) continue
+            quad(P(u0, t, 0), P(u0, t, h0), P(u1, t, h1), P(u1, t, 0))
           }
         }
-        const shellU = (z: number, t: number) =>
-          Math.max(door.framePlaneDist, Math.sqrt(Math.max(0, radius * radius - z * z - t * t)))
-        // Side walls at ±width/2, base plane to header height.
-        for (const side of [-1, 1]) {
-          const t = side * half
-          pushQuadStrip(
-            (s) =>
-              u.clone().multiplyScalar(door.framePlaneDist).addScaledVector(tv, t).setY(z0 + s * door.height),
-            (s) =>
-              u.clone().multiplyScalar(shellU(z0 + s * door.height, t)).addScaledVector(tv, t).setY(z0 + s * door.height),
-            10,
+        // Top plane: faceted profile back to the buck plane.
+        for (let i = 1; i < profile.top.length; i++) {
+          const [t0, u0] = profile.top[i - 1]
+          const [t1, u1] = profile.top[i]
+          if (u0 - door.framePlaneDist <= 1e-6 && u1 - door.framePlaneDist <= 1e-6) continue
+          quad(
+            P(door.framePlaneDist, t0, profile.topHeight),
+            P(u0, t0, profile.topHeight),
+            P(u1, t1, profile.topHeight),
+            P(door.framePlaneDist, t1, profile.topHeight),
           )
         }
-        // Flat top at header height, out to the sphere.
-        pushQuadStrip(
-          (s) =>
-            u.clone().multiplyScalar(door.framePlaneDist).addScaledVector(tv, -half + s * door.width).setY(zTop),
-          (s) =>
-            u.clone().multiplyScalar(shellU(zTop, -half + s * door.width)).addScaledVector(tv, -half + s * door.width).setY(zTop),
-          12,
-        )
-        const closureGeo = new THREE.BufferGeometry()
-        closureGeo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3))
-        closureGeo.computeVertexNormals()
-        const closure = new THREE.Mesh(
-          closureGeo,
-          new THREE.MeshStandardMaterial({
-            color: 0xc9873a,
-            roughness: 0.75,
-            metalness: 0.05,
-            transparent: opts.mode !== 'surface',
-            opacity: opts.mode === 'surface' ? 1 : 0.5,
-            side: THREE.DoubleSide,
-            depthWrite: opts.mode === 'surface',
-          }),
-        )
-        closure.name = `door-closure-${door.id}`
-        group.add(closure)
+        // Face band at the buck plane (margin zone around the rough opening).
+        if (halfEnv - half > 1e-6 || profile.topHeight - door.height > 1e-6) {
+          const d = door.framePlaneDist
+          quad(P(d, -halfEnv, 0), P(d, -halfEnv, profile.topHeight), P(d, -half, profile.topHeight), P(d, -half, 0))
+          quad(P(d, half, 0), P(d, half, profile.topHeight), P(d, halfEnv, profile.topHeight), P(d, halfEnv, 0))
+          quad(P(d, -half, door.height), P(d, -half, profile.topHeight), P(d, half, profile.topHeight), P(d, half, door.height))
+        }
+        if (positions.length > 0) {
+          const closureGeo = new THREE.BufferGeometry()
+          closureGeo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3))
+          closureGeo.computeVertexNormals()
+          const closure = new THREE.Mesh(
+            closureGeo,
+            new THREE.MeshStandardMaterial({
+              color: 0xc9873a,
+              roughness: 0.75,
+              metalness: 0.05,
+              transparent: opts.mode !== 'surface',
+              opacity: opts.mode === 'surface' ? 1 : 0.5,
+              side: THREE.DoubleSide,
+              depthWrite: opts.mode === 'surface',
+            }),
+          )
+          closure.name = `door-closure-${door.id}`
+          group.add(closure)
+        }
 
-        // Closure stick framing: plates, studs, top blocking.
+        // Closure stick framing: plates, studs, top blocking (per side).
         for (const member of door.closureFraming) {
           if (member.part === 'wall plate') {
-            for (const side of [-1, 1]) {
-              addMember(
-                u.clone().multiplyScalar(member.at + member.length / 2)
-                  .addScaledVector(tv, side * half)
-                  .setY(z0 + memberW / 2),
-                memberW, memberW, member.length,
-              )
-            }
+            addMember(
+              P(member.at + member.length / 2, member.side * halfEnv, memberW / 2),
+              memberW, memberW, member.length,
+            )
           } else if (member.part === 'wall stud') {
-            for (const side of [-1, 1]) {
-              addMember(
-                u.clone().multiplyScalar(member.at)
-                  .addScaledVector(tv, side * half)
-                  .setY(z0 + member.length / 2),
-                memberW, member.length, memberD,
-              )
-            }
+            addMember(
+              P(member.at, member.side * halfEnv, member.length / 2),
+              memberW, member.length, memberD,
+            )
           } else {
             addMember(
-              u.clone().multiplyScalar(door.framePlaneDist + member.length / 2)
-                .addScaledVector(tv, member.at)
-                .setY(zTop - memberW / 2),
+              P(door.framePlaneDist + member.length / 2, member.at, profile.topHeight - memberW / 2),
               memberW, memberW, member.length,
             )
           }

@@ -166,6 +166,24 @@ function toggleHighlight(label: string) {
               @update:model-value="(v) => (state.doors[i].azimuthDeg = ((Number(v) % 360) + 360) % 360)"
             />
           </Field>
+          <Field>
+            <FieldLabel class="text-xs">Depth ({{ smallUnit }})</FieldLabel>
+            <Input
+              type="number" step="1" class="font-mono h-8"
+              title="Recess of the buck plane vs auto fit — negative pushes it toward the shell"
+              :model-value="toDisplay(state.doors[i].depthMm)"
+              @update:model-value="(v) => (state.doors[i].depthMm = fromDisplay(Number(v) || 0))"
+            />
+          </Field>
+          <Field>
+            <FieldLabel class="text-xs">Margin ({{ smallUnit }})</FieldLabel>
+            <Input
+              type="number" min="0" step="0.5" class="font-mono h-8"
+              title="Clearance band cut beyond the rough opening (trim/shim zone)"
+              :model-value="toDisplay(state.doors[i].marginMm)"
+              @update:model-value="(v) => { const n = Number(v); state.doors[i].marginMm = n > 0 ? fromDisplay(n) : 0 }"
+            />
+          </Field>
         </div>
 
         <dl class="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-xs">
@@ -184,7 +202,8 @@ function toggleHighlight(label: string) {
           <template v-if="state.closeDoorways && door.fits">
             <dt class="text-muted-foreground">Closure sheathing</dt>
             <dd class="text-right font-mono">
-              sides {{ areaText(door.closureSideArea) }} · top {{ areaText(door.closureTopArea) }}
+              sides {{ areaText(door.closureSideArea) }} · top {{ areaText(door.closureTopArea)
+              }}<template v-if="door.closureFaceArea > 1"> · face {{ areaText(door.closureFaceArea) }}</template>
             </dd>
             <dt class="text-muted-foreground">Closure framing</dt>
             <dd class="text-right font-mono">

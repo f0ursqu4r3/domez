@@ -310,44 +310,121 @@ describe('parametric doorways', () => {
     }
   })
 
-  it('generates closure framing: plates, studs stepping down the shell arc', () => {
+  it('generates closure framing per side, fitted to the faceted shell', () => {
     const framed = cutDoorways(dome, [door], R, { minStubLength: 6, studSpacing: 16 })
     const framing = framed.doors[0].closureFraming
     const plates = framing.filter((m) => m.part === 'wall plate')
-    expect(plates).toHaveLength(1)
-    expect(plates[0].quantity).toBe(2)
-    // Plate runs at the wall plane t = ±w/2, where the shell is closer than
-    // at the door centerline (tunnelDepth).
+    // One plate per side wall (lengths may differ — the shell is faceted and
+    // not symmetric about an arbitrary door plane).
+    expect(plates).toHaveLength(2)
+    expect(plates.map((p) => p.side).sort()).toEqual([-1, 1])
+    // Faceted shell lies inside the sphere: plates can't exceed the
+    // sphere-based wall depth at the wall plane.
     const z0 = dome.cutZ * R
-    const wallPlaneDepth =
-      Math.sqrt(R * R - 18 * 18 - z0 * z0) - framed.doors[0].framePlaneDist
-    expect(plates[0].length).toBeCloseTo(wallPlaneDepth, 6)
-    expect(plates[0].length).toBeLessThan(framed.doors[0].tunnelDepth)
-    // The 36" door's wall is shallower than one 16" bay: no studs, correctly.
-    expect(framing.filter((m) => m.part === 'wall stud')).toHaveLength(0)
+    const wallPlaneDepth = Math.sqrt(R * R - 18 * 18 - z0 * z0) - framed.doors[0].framePlaneDist
+    for (const p of plates) {
+      expect(p.quantity).toBe(1)
+      expect(p.length).toBeGreaterThan(0)
+      expect(p.length).toBeLessThanOrEqual(wallPlaneDepth + 1e-6)
+    }
 
-    // A wider, taller door has deeper closure walls that DO take studs.
-    const big = cutDoorways(
-      dome,
-      [{ id: 'D1', azimuthDeg: 0, width: 48, height: 90 }],
-      R,
-      { minStubLength: 6, studSpacing: 16 },
-    )
-    const studs = big.doors[0].closureFraming.filter((m) => m.part === 'wall stud')
+    // A wider, taller door has deeper closure walls that take studs.
+    const big = cutDoorways(dome, [{ id: 'D1', azimuthDeg: 0, width: 48, height: 90 }], R, {
+      minStubLength: 6,
+      studSpacing: 16,
+    })
+    const studs = big.doors[0].closureFraming.filter((m) => m.part === 'wall stud' && m.side === 1)
     expect(studs.length).toBeGreaterThan(0)
-    // Studs shorten as they march out along the circular shell edge.
+    // Studs shorten (never grow) marching out along the faceted shell edge.
     for (let i = 1; i < studs.length; i++) {
-      expect(studs[i].length).toBeLessThan(studs[i - 1].length)
+      expect(studs[i].length).toBeLessThanOrEqual(studs[i - 1].length + 1e-6)
       expect(studs[i].at - studs[i - 1].at).toBeCloseTo(16, 9)
     }
     for (const m of big.doors[0].closureFraming) expect(m.length).toBeGreaterThanOrEqual(6)
 
+    // Stud tops land on the faceted profile, which lies within the sphere.
+    const prof = big.doors[0].closureProfile!
+    for (const [uPos, h] of [...prof.wallPos, ...prof.wallNeg]) {
+      const dist = Math.hypot(uPos, prof.halfWidth, z0 + h)
+      expect(dist).toBeLessThanOrEqual(R + 1e-6)
+    }
+
     // Framing lands in the cut list as frame rows; spacing 0 removes it.
-    const cl = buildCutList(dome, { radius: R, increment: 1 / 8, endOffset: 1.5, units: 'imperial' }, big)
+    const cl = buildCutList(
+      dome,
+      { radius: R, increment: 1 / 8, endOffset: 1.5, units: 'imperial' },
+      big,
+    )
     expect(cl.rows.some((r) => r.label === 'D1 wall plate')).toBe(true)
     expect(cl.rows.some((r) => r.label === 'D1 wall stud')).toBe(true)
-    const bare = buildCutList(dome, { radius: R, increment: 1 / 8, endOffset: 1.5, units: 'imperial' }, cut)
+    const bare = buildCutList(
+      dome,
+      { radius: R, increment: 1 / 8, endOffset: 1.5, units: 'imperial' },
+      cut,
+    )
     expect(bare.rows.some((r) => r.label.includes('wall'))).toBe(false)
+  })
+
+  it('cut ends land on the closure envelope — no floating stubs', () => {
+    const framed = cutDoorways(dome, [door], R, { minStubLength: 6 })
+    const info = framed.doors[0]
+    const halfEnv = info.width / 2
+    const z0 = dome.cutZ * R
+    const az = (info.azimuthDeg * Math.PI) / 180
+    const [ux, uy] = [Math.cos(az), Math.sin(az)]
+    for (const piece of framed.trimmed) {
+      const e = dome.edges[piece.edgeId]
+      for (const [pt, origUnit] of [
+        [piece.aUnit, dome.vertices[e.v0].position],
+        [piece.bUnit, dome.vertices[e.v1].position],
+      ] as const) {
+        const isOriginalEnd =
+          Math.hypot(pt[0] - origUnit[0], pt[1] - origUnit[1], pt[2] - origUnit[2]) < 1e-9
+        if (isOriginalEnd) continue
+        // A cut end must lie on one of the envelope boundary planes.
+        const x = pt[0] * R
+        const y = pt[1] * R
+        const z = pt[2] * R
+        const u = ux * x + uy * y
+        const t = -uy * x + ux * y
+        const onBoundary = Math.min(
+          Math.abs(Math.abs(t) - halfEnv),
+          Math.abs(z - (z0 + info.height)),
+          Math.abs(u - info.framePlaneDist),
+        )
+        expect(onBoundary).toBeLessThan(1e-6)
+      }
+    }
+  })
+
+  it('depth recesses the buck (and negative depth pushes it outward)', () => {
+    const auto = cutDoorways(dome, [door], R, { minStubLength: 6 }).doors[0]
+    const deep = cutDoorways(dome, [{ ...door, extraDepth: 12 }], R, { minStubLength: 6 }).doors[0]
+    const proud = cutDoorways(dome, [{ ...door, extraDepth: -6 }], R, { minStubLength: 6 }).doors[0]
+    expect(deep.framePlaneDist).toBeCloseTo(auto.framePlaneDist - 12, 9)
+    expect(deep.tunnelDepth).toBeCloseTo(auto.tunnelDepth + 12, 9)
+    expect(proud.framePlaneDist).toBeCloseTo(auto.framePlaneDist + 6, 9)
+    // Deeper entry cuts at least as much structure.
+    const autoCut = cutDoorways(dome, [door], R, { minStubLength: 6 })
+    const deepCut = cutDoorways(dome, [{ ...door, extraDepth: 12 }], R, { minStubLength: 6 })
+    expect(
+      deepCut.removedEdges.size + deepCut.trimmedEdges.size,
+    ).toBeGreaterThanOrEqual(autoCut.removedEdges.size + autoCut.trimmedEdges.size)
+  })
+
+  it('margin widens the cut envelope beyond the buck', () => {
+    const base = cutDoorways(dome, [door], R, { minStubLength: 6 })
+    const wide = cutDoorways(dome, [{ ...door, margin: 6 }], R, { minStubLength: 6 })
+    expect(
+      wide.removedEdges.size + wide.trimmedEdges.size + wide.removedFaces.size,
+    ).toBeGreaterThanOrEqual(
+      base.removedEdges.size + base.trimmedEdges.size + base.removedFaces.size,
+    )
+    expect(wide.doors[0].closureProfile!.halfWidth).toBeCloseTo(24, 9)
+    expect(wide.doors[0].closureProfile!.topHeight).toBeCloseTo(86, 9)
+    // Face band = envelope rectangle minus the rough opening.
+    expect(wide.doors[0].closureFaceArea).toBeCloseTo(48 * 86 - 36 * 80, 6)
+    expect(base.doors[0].closureFaceArea).toBe(0)
   })
 
   it('adjusts the cut list: reduced type counts, trimmed rows, buck members', () => {

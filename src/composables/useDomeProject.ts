@@ -154,8 +154,10 @@ interface ProjectState {
   /** Panel opening assignments: faceId -> window | vent (doors are parametric). */
   openings: OpeningAssignments
   /** Parametric doorways: position + physical size, canonical mm. Doors
-   * survive frequency/diameter changes — only their fit is revalidated. */
-  doors: { azimuthDeg: number; widthMm: number; heightMm: number }[]
+   * survive frequency/diameter changes — only their fit is revalidated.
+   * depthMm is signed (negative pushes the buck toward the shell);
+   * marginMm is the cut clearance band around the rough opening. */
+  doors: { azimuthDeg: number; widthMm: number; heightMm: number; depthMm: number; marginMm: number }[]
   /** Render the extruded-entry closure sealing the shell back to each buck. */
   closeDoorways: boolean
   /** Active viewer tool. 'door' places a doorway at the clicked azimuth;
@@ -348,6 +350,8 @@ const doorSpecs = computed<DoorSpec[]>(() => {
     azimuthDeg: d.azimuthDeg,
     width: c(d.widthMm),
     height: c(d.heightMm),
+    extraDepth: c(d.depthMm),
+    margin: c(d.marginMm),
   }))
 })
 
@@ -386,6 +390,8 @@ function addDoorAt(azimuthDeg: number) {
     azimuthDeg: Math.round(((azimuthDeg % 360) + 360) % 360),
     widthMm: 36 * MM_PER_INCH,
     heightMm: 80 * MM_PER_INCH,
+    depthMm: 0,
+    marginMm: 0,
   })
   state.openingTool = 'off'
 }
@@ -597,7 +603,13 @@ function loadProjectFile(text: string): boolean {
         d.widthMm > 0 &&
         d.heightMm > 0,
     )
-    .map((d) => ({ azimuthDeg: d.azimuthDeg, widthMm: d.widthMm, heightMm: d.heightMm }))
+    .map((d) => ({
+      azimuthDeg: d.azimuthDeg,
+      widthMm: d.widthMm,
+      heightMm: d.heightMm,
+      depthMm: typeof d.depthMm === 'number' ? d.depthMm : 0,
+      marginMm: typeof d.marginMm === 'number' && d.marginMm > 0 ? d.marginMm : 0,
+    }))
   state.selection = null
   return true
 }

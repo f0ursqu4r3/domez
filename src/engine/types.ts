@@ -95,6 +95,10 @@ export interface DomeModel {
   rhombi?: { vertexIds: [number, number, number, number]; faceIds: [number, number] }[]
   /** Zome generation params echo (absent on geodesic models). */
   zome?: { sides: number; pitchDeg: number; rows: number; leveled: boolean }
+  /** Polygon panels for goldberg models: each polygon and its fan faces. */
+  polys?: { vertexIds: number[]; faceIds: number[] }[]
+  /** Goldberg params echo (absent on other models). */
+  goldberg?: { frequency: number; fraction: string; leveled: boolean }
 }
 
 /** Full icosphere prior to truncation (used internally and for tests). */

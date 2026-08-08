@@ -16,6 +16,7 @@ import { buildBom, estimateCost, defaultPrice } from '../bom'
 import { costsCsv } from '../exports/csv'
 import { assemblyGuideSvg } from '../exports/guide'
 import { panelPatternsSvg } from '../exports/patterns'
+import { generateGoldberg } from '../goldberg'
 import { buildAssemblyPlan } from '../assembly'
 import { generateZome } from '../zome'
 import { hubAxes } from '../hubs'
@@ -1665,5 +1666,52 @@ describe('panel flat patterns', () => {
       { units: 'imperial', title: 'empty' },
     )
     expect(empty).toContain('no panels')
+  })
+})
+
+describe('goldberg dual — full sphere and natural base', () => {
+  it.each([1, 2, 3])('frequency %i full dual satisfies Goldberg counts', (f) => {
+    const m = generateGoldberg({
+      frequency: f as Frequency,
+      fraction: 'full',
+      baseMode: 'natural',
+    })
+    expect(m.vertices.length).toBe(20 * f * f)
+    expect(m.edges.length).toBe(30 * f * f)
+    const pentagons = m.polys!.filter((p) => p.vertexIds.length === 5)
+    const hexagons = m.polys!.filter((p) => p.vertexIds.length === 6)
+    expect(pentagons.length).toBe(12)
+    expect(hexagons.length).toBe(10 * (f * f - 1))
+    for (const v of m.vertices) expect(v.edgeIds.length).toBe(3)
+  })
+
+  it('1V full dual is the dodecahedron: one strut type', () => {
+    const m = generateGoldberg({ frequency: 1, fraction: 'full', baseMode: 'natural' })
+    expect(m.edges.length).toBe(30)
+    expect(m.strutTypes.length).toBe(1)
+    expect(m.polys!.length).toBe(12)
+  })
+
+  it('natural truncation keeps whole polygons only, outward winding', () => {
+    const m = generateGoldberg({ frequency: 3, fraction: '1/2', baseMode: 'natural' })
+    expect(m.polys!.length).toBeGreaterThan(10)
+    for (const p of m.polys!) {
+      for (const vi of p.vertexIds) {
+        expect(m.vertices[vi].position[2]).toBeGreaterThan(m.cutZ - 1e-9)
+      }
+    }
+    const centerZ = m.cutZ + m.unitHeight / 2
+    for (const f of m.faces) {
+      const [a, b, c] = f.vertexIds.map((vi) => m.vertices[vi].position)
+      const n = cross(sub(b, a), sub(c, a))
+      const cen = [
+        (a[0] + b[0] + c[0]) / 3,
+        (a[1] + b[1] + c[1]) / 3,
+        (a[2] + b[2] + c[2]) / 3 - centerZ,
+      ] as const
+      expect(dot(n, cen)).toBeGreaterThan(0)
+    }
+    expect(m.vertices.some((v) => v.isBase)).toBe(true)
+    for (const f of m.faces) expect(f.edgeIds.length).toBeLessThanOrEqual(3)
   })
 })

@@ -1,5 +1,6 @@
 import type { DomeModel, UnitSystem } from './types'
 import type { DoorwayCut } from './doorway'
+import type { RiserModel } from './riser'
 import { roundToIncrement } from './units'
 
 export type JointMethodId = 'hub' | 'flattened-pipe' | 'timber-plate'
@@ -86,6 +87,7 @@ export function buildCutList(
   model: DomeModel,
   opts: CutListOptions,
   doorway?: DoorwayCut,
+  riser?: RiserModel | null,
 ): CutList {
   const removedPerType = new Map<number, number>()
   if (doorway) {
@@ -234,6 +236,43 @@ export function buildCutList(
           note: framingNote[g.part],
         })
       }
+    }
+  }
+
+  if (riser) {
+    // Riser wall members: group identical part+length pieces into one row.
+    const groups = new Map<string, { part: string; exact: number; rounded: number; qty: number }>()
+    for (const m of riser.members) {
+      const rounded = roundToIncrement(m.length, opts.increment)
+      const key = `${m.part}:${rounded.toFixed(6)}`
+      const g = groups.get(key) ?? { part: m.part, exact: m.length, rounded, qty: 0 }
+      g.qty += m.quantity
+      groups.set(key, g)
+    }
+    const riserNote: Record<string, string> = {
+      'riser top plate': 'riser wall top plate — the base ring bears on it',
+      'riser bottom plate': 'riser wall bottom plate — anchor to the foundation',
+      'riser stud': 'riser wall stud on centers (corner posts included)',
+      'riser king stud': 'riser wall king stud at a door opening',
+      'riser trimmer': 'riser wall trimmer stud at a door opening',
+    }
+    for (const g of [...groups.values()].sort(
+      (a, b) => a.part.localeCompare(b.part) || b.rounded - a.rounded,
+    )) {
+      rows.push({
+        typeId: -1,
+        label: g.part,
+        quantity: g.qty,
+        chordLength: g.exact,
+        exactCutLength: g.exact,
+        roundedCutLength: g.rounded,
+        roundingError: Math.abs(g.rounded - g.exact),
+        axialAngleDeg: 90,
+        dihedralMinDeg: NaN,
+        dihedralMaxDeg: NaN,
+        kind: 'frame',
+        note: riserNote[g.part],
+      })
     }
   }
 

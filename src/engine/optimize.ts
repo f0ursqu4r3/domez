@@ -1,6 +1,7 @@
 import type { DomeModel, UnitSystem } from './types'
 import { buildCutList } from './cutlist'
 import { cutDoorways, type DoorSpec } from './doorway'
+import { buildRiser } from './riser'
 import { packCuts, type StockLength } from './packing'
 import { workingToDiameter } from './units'
 
@@ -24,6 +25,11 @@ export interface OptimizeOptions {
   minStubLength?: number
   /** Closure framing stud spacing, forwarded to the doorway cut. */
   studSpacing?: number
+  /** Riser wall height, working units (0/omitted = none). Portal dims are
+   * floor-referenced when set; riser framing joins each candidate's takeoff. */
+  riserHeight?: number
+  /** Riser member width for king-stud offsets, working units. */
+  riserMemberWidth?: number
 }
 
 export interface OptimizeCandidate {
@@ -63,6 +69,17 @@ export function optimizeDiameter(model: DomeModel, opts: OptimizeOptions): Optim
         ? cutDoorways(model, opts.doors, diameter / 2, {
             minStubLength: opts.minStubLength ?? 0,
             studSpacing: opts.studSpacing,
+            riserHeight: opts.riserHeight,
+          })
+        : undefined
+    const riser =
+      (opts.riserHeight ?? 0) > 0
+        ? buildRiser(model, diameter / 2, {
+            height: opts.riserHeight!,
+            studSpacing: opts.units === 'imperial' ? 16 : 400,
+            memberWidth: opts.riserMemberWidth ?? (opts.units === 'imperial' ? 1.5 : 38),
+            minStubLength: opts.minStubLength ?? 0,
+            doors: opts.doors,
           })
         : undefined
     const cutList = buildCutList(
@@ -74,6 +91,7 @@ export function optimizeDiameter(model: DomeModel, opts: OptimizeOptions): Optim
         units: opts.units,
       },
       doorway,
+      riser,
     )
     const packing = packCuts(cutList, { kerf: opts.kerf, stock: opts.stock })
     const meanError =

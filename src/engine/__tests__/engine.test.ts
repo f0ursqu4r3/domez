@@ -881,3 +881,64 @@ describe('portals over a riser wall', () => {
     expect(a.doors[0].closureSideArea).toBeCloseTo(b.doors[0].closureSideArea, 9)
   })
 })
+
+describe('riser wall in the cut list', () => {
+  const model = generateDome({ frequency: 3, fraction: '1/2', baseMode: 'leveled' })
+  const radius = 150
+  const riser = buildRiser(model, radius, {
+    height: 24,
+    studSpacing: 16,
+    memberWidth: 1.5,
+    minStubLength: 6,
+    doors: [{ id: 'D1', azimuthDeg: 0, width: 48, height: 90 }],
+  })!
+  const cutOpts = { radius, increment: 1 / 8, endOffset: 0, units: 'imperial' as const }
+
+  it('adds grouped frame rows for every riser part', () => {
+    const list = buildCutList(model, cutOpts, undefined, riser)
+    const riserRows = list.rows.filter((r) => r.kind === 'frame' && r.label.startsWith('riser'))
+    expect(riserRows.length).toBeGreaterThan(0)
+    const qty = riserRows.reduce((n, r) => n + r.quantity, 0)
+    expect(qty).toBe(riser.members.reduce((n, m) => n + m.quantity, 0))
+    for (const part of [
+      'riser top plate',
+      'riser bottom plate',
+      'riser stud',
+      'riser king stud',
+      'riser trimmer',
+    ]) {
+      expect(riserRows.some((r) => r.label === part)).toBe(true)
+    }
+    // Frame rows never count as struts; type rows stay index-stable.
+    expect(list.rows[0].typeId).toBe(0)
+    expect(list.totalStruts).toBe(buildCutList(model, cutOpts).totalStruts)
+  })
+
+  it('flows into packing and the optimizer', () => {
+    const list = buildCutList(model, cutOpts, undefined, riser)
+    const packed = packCuts(list, {
+      kerf: 0.125,
+      stock: [
+        { length: 96, label: '8 ft' },
+        { length: 144, label: '12 ft' },
+      ],
+    })
+    const placed = packed.boards.flatMap((b) => b.cuts).length + packed.unplaceable.length
+    expect(placed).toBe(list.rows.reduce((n, r) => n + r.quantity, 0))
+    const result = optimizeDiameter(model, {
+      minDiameter: 280,
+      maxDiameter: 320,
+      step: 8,
+      increment: 1 / 8,
+      endOffset: 0,
+      kerf: 0.125,
+      stock: [{ length: 144, label: '12 ft' }],
+      units: 'imperial',
+      doors: [{ id: 'D1', azimuthDeg: 0, width: 48, height: 90 }],
+      minStubLength: 6,
+      riserHeight: 24,
+      riserMemberWidth: 1.5,
+    })
+    expect(result.best).not.toBeNull()
+  })
+})

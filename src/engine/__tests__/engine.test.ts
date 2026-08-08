@@ -12,6 +12,7 @@ import { buildRiser, orderedBaseRing } from '../riser'
 import { projectJson, parseProjectJson } from '../exports/json'
 import { generateZome } from '../zome'
 import { hubAxes } from '../hubs'
+import { miterCuts } from '../miter'
 import { formatFeetInches, formatInchesFractional, roundToIncrement } from '../units'
 import { cross, dot, sub, add, length } from '../vec'
 
@@ -1271,5 +1272,63 @@ describe('hub axes', () => {
     const axes = hubAxes(z)
     const apex = z.vertices.reduce((a, b) => (a.position[2] > b.position[2] ? a : b))
     expect(axes[apex.id][2]).toBeCloseTo(1, 6)
+  })
+})
+
+describe('miter cuts', () => {
+  it('computes symmetric seams at the 1V apex', () => {
+    const m = generateDome({ frequency: 1, fraction: '5/8' })
+    const cuts = miterCuts(m)
+    expect(cuts.length).toBe(m.edges.length)
+    const apex = m.vertices.reduce((a, b) => (a.position[2] > b.position[2] ? a : b))
+    const apexEnds = m.edges
+      .filter((e) => e.v0 === apex.id || e.v1 === apex.id)
+      .map((e) => cuts[e.id][e.v0 === apex.id ? 0 : 1])
+    expect(apexEnds.length).toBe(5)
+    for (const end of apexEnds) {
+      expect(end.vertexId).toBe(apex.id)
+      expect(end.leftSeamDeg).toBeCloseTo(apexEnds[0].leftSeamDeg, 6)
+      expect(end.rightSeamDeg).toBeCloseTo(end.leftSeamDeg, 6)
+      expect(end.leftSeamDeg).toBeGreaterThan(10)
+      expect(end.leftSeamDeg).toBeLessThan(45)
+    }
+    // Verify against a direct nearest-neighbor angle computation.
+    const dirs = m.edges
+      .filter((e) => e.v0 === apex.id || e.v1 === apex.id)
+      .map((e) => {
+        const other = e.v0 === apex.id ? e.v1 : e.v0
+        const p = m.vertices[other].position
+        const a = apex.position
+        const d = [p[0] - a[0], p[1] - a[1], p[2] - a[2]]
+        const l = Math.hypot(d[0], d[1], d[2])
+        return [d[0] / l, d[1] / l, d[2] / l]
+      })
+    let minAngle = Infinity
+    for (let i = 1; i < dirs.length; i++) {
+      const c = dirs[0][0] * dirs[i][0] + dirs[0][1] * dirs[i][1] + dirs[0][2] * dirs[i][2]
+      minAngle = Math.min(minAngle, (Math.acos(Math.max(-1, Math.min(1, c))) * 180) / Math.PI)
+    }
+    expect(apexEnds[0].leftSeamDeg).toBeCloseTo(minAngle / 2, 6)
+  })
+
+  it('tilt tracks the axial angle and the zome apex is symmetric', () => {
+    const m = generateDome({ frequency: 3, fraction: '1/2', baseMode: 'leveled' })
+    const cuts = miterCuts(m)
+    for (const e of m.edges.slice(0, 20)) {
+      const t = m.strutTypes[e.typeId]
+      for (const end of cuts[e.id]) {
+        // Loose correlation band: tilt is measured against the face-normal
+        // axis, which leans outward at one-sided base hubs.
+        expect(Math.abs(end.tiltDeg - (90 - t.axialAngleDeg))).toBeLessThan(8)
+      }
+    }
+    const z = generateZome({ sides: 8, pitchDeg: 45, rows: 3, baseMode: 'natural' })
+    const zc = miterCuts(z)
+    const apex = z.vertices.reduce((a, b) => (a.position[2] > b.position[2] ? a : b))
+    const apexEnds = z.edges
+      .filter((e) => e.v0 === apex.id || e.v1 === apex.id)
+      .map((e) => zc[e.id][e.v0 === apex.id ? 0 : 1])
+    expect(apexEnds.length).toBe(8)
+    for (const end of apexEnds) expect(end.leftSeamDeg).toBeCloseTo(apexEnds[0].leftSeamDeg, 6)
   })
 })

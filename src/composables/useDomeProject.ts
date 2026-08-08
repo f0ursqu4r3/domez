@@ -170,6 +170,8 @@ interface ProjectState {
   /** Opening group label to highlight in the viewer (from the Openings panel). */
   highlightOpening: string | null
   selection: Selection
+  /** Bumped by resetProject so the viewer re-frames its camera. Not persisted. */
+  viewResetToken: number
   optimizer: {
     min: number
     max: number
@@ -200,6 +202,7 @@ const state = reactive<ProjectState>({
   openingTool: 'off',
   highlightOpening: null,
   selection: null,
+  viewResetToken: 0,
   optimizer: { min: 20, max: 30, result: null, running: false },
 })
 
@@ -768,6 +771,42 @@ function restorePersisted() {
 
 restorePersisted()
 
+/** Wipe the saved session and return every setting to factory defaults.
+ * Field order mirrors restorePersisted (sync watchers fire on units,
+ * material, and joint changes). */
+function resetProject() {
+  try {
+    localStorage.removeItem(STORAGE_KEY)
+  } catch {
+    // Best-effort.
+  }
+  state.units = 'imperial'
+  state.frequency = 5
+  state.fraction = '5/8'
+  state.baseMode = 'natural'
+  state.materialId = 'lumber-2x4'
+  state.jointId = 'timber-plate'
+  state.diameterMm = 26 * MM_PER_FOOT
+  state.endOffsetMm = 1.5 * MM_PER_INCH
+  state.kerfMm = (1 / 8) * MM_PER_INCH
+  state.increment = 1 / 8
+  state.disabledStock = {}
+  state.viewMode = 'assembly'
+  state.explode = 0.35
+  state.trueSize = false
+  state.openings = {}
+  state.doors = []
+  state.closeDoorways = true
+  state.panelPlacement = 'outside'
+  state.openingTool = 'off'
+  state.highlightOpening = null
+  state.selection = null
+  state.optimizer.min = 20
+  state.optimizer.max = 30
+  state.optimizer.result = null
+  state.viewResetToken++
+}
+
 watch(
   () => JSON.stringify(persistedSlice()),
   (json) => {
@@ -810,6 +849,7 @@ export function useDomeProject() {
     summary,
     runOptimizer,
     applyOptimizedDiameter,
+    resetProject,
     exporters,
     loadProjectFile,
     titleOf,

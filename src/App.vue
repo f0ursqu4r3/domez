@@ -1,7 +1,9 @@
 <script setup lang="ts">
 import { computed } from 'vue'
+import { RotateCcw } from '@lucide/vue'
 import { useDomeProject } from '@/composables/useDomeProject'
 import { formatLength } from '@/engine/units'
+import { Button } from '@/components/ui/button'
 import DomeViewer from '@/components/DomeViewer.vue'
 import ViewModeBar from '@/components/ViewModeBar.vue'
 import StrutLegend from '@/components/StrutLegend.vue'
@@ -16,7 +18,14 @@ import ExportPanel from '@/components/panels/ExportPanel.vue'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { ScrollArea } from '@/components/ui/scroll-area'
 
-const { state, summary, cutList, diameter } = useDomeProject()
+const project = useDomeProject()
+const { state, summary, cutList, diameter } = project
+
+function onReset() {
+  if (window.confirm('Reset everything to defaults? Doors, openings, and settings will be cleared.')) {
+    project.resetProject()
+  }
+}
 
 const chips = computed(() => [
   {
@@ -84,6 +93,15 @@ const chips = computed(() => [
           }}</span>
           <span class="font-mono text-xs">{{ chip.value }}</span>
         </span>
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          class="shrink-0 text-muted-foreground hover:text-foreground"
+          title="Reset to defaults — clears doors, openings, and settings"
+          @click="onReset"
+        >
+          <RotateCcw />
+        </Button>
       </div>
     </header>
 

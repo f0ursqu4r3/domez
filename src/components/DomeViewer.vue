@@ -213,6 +213,14 @@ watch([model, radius], () => {
   rebuildGround()
   adjustCameraForRadius()
 })
+// Reset-to-defaults re-frames the view from scratch.
+watch(
+  () => state.viewResetToken,
+  () => {
+    frameCamera()
+    prevRadius = radius.value
+  },
+)
 watch(
   () => [
     state.viewMode,

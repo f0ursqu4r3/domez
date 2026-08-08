@@ -15,6 +15,8 @@ const {
   addDoorAt,
   addWindowAt,
   doorway,
+  riser,
+  workingRiserHeight,
 } = useDomeProject()
 
 const container = ref<HTMLDivElement | null>(null)
@@ -59,6 +61,7 @@ function rebuildDome() {
     doorway: doorway.value,
     closeDoorways: state.closeDoorways,
     panelPlacement: state.panelPlacement,
+    riser: riser.value,
   })
   scene.add(domeGroup)
 }
@@ -72,8 +75,8 @@ function rebuildGround() {
   groundGroup = new THREE.Group()
   const r = radius.value
   const grid = new THREE.PolarGridHelper(r * 1.6, 12, 8, 48, 0x2a3648, 0x1a2230)
-  // The floor sits at the dome's base plane, not the sphere equator.
-  grid.position.y = model.value.cutZ * r - 0.001 * r
+  // The floor sits at the foundation: the base plane, dropped by the riser.
+  grid.position.y = model.value.cutZ * r - workingRiserHeight.value - 0.001 * r
   groundGroup.add(grid)
   scene.add(groundGroup)
 }
@@ -136,10 +139,12 @@ function onPointerUp(ev: PointerEvent) {
       if (state.openingTool === 'door') {
         addDoorAt(azimuthDeg)
       } else {
-        // Window centers on the clicked height (three y == engine z).
-        const heightAboveBase = hit.point.y - model.value.cutZ * radius.value
+        // Window centers on the clicked height, measured from the FLOOR
+        // (the foundation when a riser is active; three y == engine z).
+        const heightAboveFloor =
+          hit.point.y - (model.value.cutZ * radius.value - workingRiserHeight.value)
         const mmPerWorking = state.units === 'imperial' ? 25.4 : 1
-        addWindowAt(azimuthDeg, heightAboveBase * mmPerWorking)
+        addWindowAt(azimuthDeg, heightAboveFloor * mmPerWorking)
       }
     }
     return
@@ -224,7 +229,7 @@ onMounted(() => {
   loop()
 })
 
-watch([model, radius], () => {
+watch([model, radius, workingRiserHeight], () => {
   rebuildDome()
   rebuildGround()
   adjustCameraForRadius()
@@ -249,6 +254,7 @@ watch(
     doorway.value,
     state.closeDoorways,
     state.panelPlacement,
+    riser.value,
   ],
   () => rebuildDome(),
   { deep: true },

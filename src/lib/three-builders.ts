@@ -203,25 +203,28 @@ export function buildDomeGroup(
       }
       const base = u.clone().multiplyScalar(door.framePlaneDist)
       const half = door.width / 2
-      // Jambs at ±width/2, spanning sill to header (sill = 0 for doors).
+      // Jambs at ±width/2 span the full opening — through the riser for
+      // doors (buckBottomRel < 0 when the floor sits below the base plane).
+      const bLo = door.buckBottomRel
+      const bHi = door.buckTopRel
       const sillH = door.sillHeight ?? 0
       addMember(
-        base.clone().addScaledVector(tv, half).setY(z0 + sillH + door.height / 2),
-        memberW, door.height, memberD,
+        base.clone().addScaledVector(tv, half).setY(z0 + (bLo + bHi) / 2),
+        memberW, bHi - bLo, memberD,
       )
       addMember(
-        base.clone().addScaledVector(tv, -half).setY(z0 + sillH + door.height / 2),
-        memberW, door.height, memberD,
+        base.clone().addScaledVector(tv, -half).setY(z0 + (bLo + bHi) / 2),
+        memberW, bHi - bLo, memberD,
       )
       // Header across the top, spanning the rough opening plus both jambs.
       addMember(
-        base.clone().setY(z0 + sillH + door.height + memberW / 2),
+        base.clone().setY(z0 + bHi + memberW / 2),
         door.width + 2 * memberW, memberW, memberD,
       )
       // Window sill member under the opening.
       if (sillH > 0) {
         addMember(
-          base.clone().setY(z0 + sillH - memberW / 2),
+          base.clone().setY(z0 + bLo - memberW / 2),
           door.width + 2 * memberW, memberW, memberD,
         )
       }
@@ -282,8 +285,8 @@ export function buildDomeGroup(
         planeStrips(profile.top, zHi)
         if (profile.bottom.length > 0) planeStrips(profile.bottom, zLo)
         // Face band at the buck plane (margin zone around the rough opening).
-        const buckLo = sillH
-        const buckHi = sillH + door.height
+        const buckLo = bLo
+        const buckHi = bHi
         if (halfEnv - half > 1e-6 || zHi - buckHi > 1e-6 || buckLo - zLo > 1e-6) {
           const d = door.framePlaneDist
           quad(P(d, -halfEnv, zLo), P(d, -halfEnv, zHi), P(d, -half, zHi), P(d, -half, zLo))
@@ -357,10 +360,10 @@ export function buildDomeGroup(
           jointPts.push(a, b)
         }
         // Buck corners are junctions too.
-        jointPts.push(P(door.framePlaneDist, -half, sillH), P(door.framePlaneDist, half, sillH))
+        jointPts.push(P(door.framePlaneDist, -half, bLo), P(door.framePlaneDist, half, bLo))
         jointPts.push(
-          P(door.framePlaneDist, -half, sillH + door.height),
-          P(door.framePlaneDist, half, sillH + door.height),
+          P(door.framePlaneDist, -half, bHi),
+          P(door.framePlaneDist, half, bHi),
         )
         // Connector nodes at unique junctions.
         const seen = new Set<string>()
@@ -411,6 +414,117 @@ export function buildDomeGroup(
     if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true
     pick.hubMesh = mesh
     group.add(mesh)
+  }
+
+  // ---- Riser wall: sheathing quads, framing bars, joints ----
+  if (opts.riser) {
+    // Riser coords are already world working units; same axis rotation as toThree.
+    const r3 = (p: [number, number, number]) => new THREE.Vector3(p[0], p[2], -p[1])
+    const h = opts.riser.height
+    const memberW = section
+      ? section.kind === 'rect'
+        ? section.width
+        : section.diameter
+      : Math.max(strutR * 2, radius * 0.012)
+    const memberD = section && section.kind === 'rect' ? section.depth : memberW
+    if (showStruts) {
+      const barGeo = new THREE.BoxGeometry(1, 1, 1)
+      const barMat = new THREE.MeshStandardMaterial({ color: 0xc9873a, roughness: 0.6, metalness: 0.1 })
+      for (const m of opts.riser.members) {
+        const a = r3(m.a)
+        const b = r3(m.b)
+        const dir = b.clone().sub(a)
+        const len = dir.length()
+        if (len < 1e-6) continue
+        const yAxis = dir.clone().normalize()
+        const ref = Math.abs(yAxis.y) > 0.9 ? new THREE.Vector3(1, 0, 0) : new THREE.Vector3(0, 1, 0)
+        const xAxis = new THREE.Vector3().crossVectors(yAxis, ref).normalize()
+        const zAxis = new THREE.Vector3().crossVectors(xAxis, yAxis)
+        const bar = new THREE.Mesh(barGeo, barMat)
+        const mtx = new THREE.Matrix4().makeBasis(
+          xAxis.multiplyScalar(memberW),
+          yAxis.multiplyScalar(len),
+          zAxis.multiplyScalar(Math.min(memberD, memberW * 1.5)),
+        )
+        mtx.setPosition(a.clone().add(b).multiplyScalar(0.5))
+        bar.applyMatrix4(mtx)
+        bar.name = 'riser-framing'
+        group.add(bar)
+      }
+      const jointGeo = new THREE.SphereGeometry(1, 10, 8)
+      const jointMat = new THREE.MeshStandardMaterial({ color: 0xd8dee9, roughness: 0.4, metalness: 0.55 })
+      for (const p of opts.riser.jointNodes) {
+        const joint = new THREE.Mesh(jointGeo, jointMat)
+        joint.scale.setScalar(Math.max(memberW * 0.7, radius * 0.004))
+        joint.position.copy(r3(p))
+        joint.name = 'riser-joint'
+        group.add(joint)
+      }
+    }
+    if (opts.mode !== 'frame') {
+      const positions: number[] = []
+      const strutDepth = section
+        ? section.kind === 'rect'
+          ? section.depth
+          : section.diameter
+        : strutR * 2
+      const skins =
+        opts.panelPlacement === 'inside'
+          ? [-strutDepth / 2]
+          : opts.panelPlacement === 'both'
+            ? [strutDepth / 2, -strutDepth / 2]
+            : [strutDepth / 2]
+      for (const seg of opts.riser.segments) {
+        // Kept sheathing intervals = segment minus door openings.
+        const kept: [number, number][] = []
+        let cursor = 0
+        for (const [d0, d1] of seg.openings) {
+          if (d0 > cursor + 1e-9) kept.push([cursor, d0])
+          cursor = Math.max(cursor, d1)
+        }
+        if (cursor < seg.length - 1e-9) kept.push([cursor, seg.length])
+        const dx = (seg.b[0] - seg.a[0]) / seg.length
+        const dy = (seg.b[1] - seg.a[1]) / seg.length
+        // Outward horizontal normal (away from the axis).
+        let nx = dy
+        let ny = -dx
+        if (nx * (seg.a[0] + seg.b[0]) + ny * (seg.a[1] + seg.b[1]) < 0) {
+          nx = -nx
+          ny = -ny
+        }
+        for (const [d0, d1] of kept) {
+          for (const skin of skins) {
+            const P = (d: number, z: number) =>
+              new THREE.Vector3(seg.a[0] + dx * d + nx * skin, z, -(seg.a[1] + dy * d + ny * skin))
+            const zT = seg.a[2]
+            const zB = zT - h
+            const q = [P(d0, zB), P(d0, zT), P(d1, zT), P(d1, zB)]
+            positions.push(q[0].x, q[0].y, q[0].z, q[1].x, q[1].y, q[1].z, q[2].x, q[2].y, q[2].z)
+            positions.push(q[0].x, q[0].y, q[0].z, q[2].x, q[2].y, q[2].z, q[3].x, q[3].y, q[3].z)
+          }
+        }
+      }
+      if (positions.length > 0) {
+        const geo = new THREE.BufferGeometry()
+        geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3))
+        geo.computeVertexNormals()
+        const surface = opts.mode === 'surface'
+        const mesh = new THREE.Mesh(
+          geo,
+          new THREE.MeshStandardMaterial({
+            color: 0x1c2735,
+            roughness: 0.85,
+            metalness: 0.05,
+            transparent: !surface,
+            opacity: surface ? 1 : 0.42,
+            side: THREE.DoubleSide,
+            depthWrite: surface,
+          }),
+        )
+        mesh.name = 'riser-sheathing'
+        group.add(mesh)
+      }
+    }
   }
 
   // ---- Panels, one mesh per opening kind so each gets its own material ----

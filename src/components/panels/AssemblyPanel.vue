@@ -2,7 +2,7 @@
 import { useDomeProject } from '@/composables/useDomeProject'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Tag } from '@lucide/vue'
+import { PencilRuler, Tag } from '@lucide/vue'
 
 const { assemblyPlan, exporters } = useDomeProject()
 </script>
@@ -11,10 +11,16 @@ const { assemblyPlan, exporters } = useDomeProject()
   <div class="flex flex-col gap-3 p-4">
     <div class="flex items-center justify-between">
       <h3 class="section-title mb-0">Assembly — base up</h3>
-      <Button size="sm" variant="outline" @click="exporters.labelsSvg()">
-        <Tag data-icon="inline-start" />
-        Hub labels
-      </Button>
+      <div class="flex gap-1.5">
+        <Button size="sm" variant="outline" @click="exporters.assemblyGuide()">
+          <PencilRuler data-icon="inline-start" />
+          Print guide
+        </Button>
+        <Button size="sm" variant="outline" @click="exporters.labelsSvg()">
+          <Tag data-icon="inline-start" />
+          Hub labels
+        </Button>
+      </div>
     </div>
     <ol class="flex flex-col gap-2">
       <li

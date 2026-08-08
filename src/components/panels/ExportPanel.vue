@@ -55,6 +55,18 @@ const groups = computed(() => [
         icon: ClipboardList,
         run: exporters.boardDiagrams,
       },
+      {
+        label: 'Assembly guide SVG',
+        desc: 'course-by-course build book',
+        icon: ClipboardList,
+        run: exporters.assemblyGuide,
+      },
+      {
+        label: 'Panel patterns SVG',
+        desc: 'dimensioned panel drawings',
+        icon: PencilRuler,
+        run: exporters.panelPatterns,
+      },
       { label: 'Hubs CSV', desc: 'hub schedule', icon: FileSpreadsheet, run: exporters.hubsCsv },
       {
         label: 'Openings CSV',

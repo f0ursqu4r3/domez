@@ -25,6 +25,8 @@ import { diameterToWorking, IMPERIAL_INCREMENTS, METRIC_INCREMENTS } from '@/eng
 import type { Fraction, Frequency, UnitSystem } from '@/engine/types'
 import { cutListCsv, hubsCsv, boardsCsv, openingsCsv, panelsCsv, miterCsv, costsCsv } from '@/engine/exports/csv'
 import { cutTemplatesSvg, boardDiagramsSvg } from '@/engine/exports/templates'
+import { assemblyGuideSvg } from '@/engine/exports/guide'
+import { panelPatternsSvg } from '@/engine/exports/patterns'
 import { domeObj } from '@/engine/exports/obj'
 import { fabricationSvg, hubLabelsSvg } from '@/engine/exports/svg'
 import { fabricationDxf } from '@/engine/exports/dxf'
@@ -786,6 +788,22 @@ const exporters = {
       `${fileStem.value}-costs.csv`,
       costsCsv(costEstimate.value, state.currency),
       'text/csv',
+    ),
+  assemblyGuide: () =>
+    download(
+      `${fileStem.value}-assembly-guide.svg`,
+      assemblyGuideSvg(model.value, assemblyPlan.value, cutList.value, {
+        units: state.units,
+        radius: radius.value,
+        title: titleOf(),
+      }),
+      'image/svg+xml',
+    ),
+  panelPatterns: () =>
+    download(
+      `${fileStem.value}-panel-patterns.svg`,
+      panelPatternsSvg(panelPlan.value, { units: state.units, title: titleOf() }),
+      'image/svg+xml',
     ),
   boardDiagrams: () =>
     download(

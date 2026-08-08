@@ -201,12 +201,78 @@ export function buildDomeGroup(
       const keptEdges = t.edgeIds.filter((eid) => !cutEdges.has(eid))
       if (keptEdges.length === 0) continue
       if ((bevelStruts || miterStruts) && section && section.kind === 'rect') {
-        // Timber-plate: one merged geometry of custom hexahedra whose end
-        // faces are cut perpendicular to each hub's axis (the axial bevel).
+        // Merged custom geometry. Timber-plate: hexahedra with end faces cut
+        // perpendicular to each hub's axis (the axial bevel). Mitered: each
+        // board is a convex box extended past the vertices and CLIPPED by
+        // its neighbor seam half-spaces — exact mating for any hub, however
+        // asymmetric the fan.
         const positions: number[] = []
         const faceMap: number[] = []
         const w2 = section.width / 2
         const d2 = section.depth / 2
+        const pushPoly = (poly: THREE.Vector3[], eid: number, explode: THREE.Vector3) => {
+          for (let i = 2; i < poly.length; i++) {
+            for (const pt of [poly[0], poly[i - 1], poly[i]]) {
+              positions.push(pt.x + explode.x, pt.y + explode.y, pt.z + explode.z)
+            }
+            faceMap.push(eid)
+          }
+        }
+        /** Clip a convex solid (list of convex polygon faces) by the
+         * half-space (x − p0)·n ≥ 0, sealing the cut with a cap face. */
+        const clipSolid = (
+          faces: THREE.Vector3[][],
+          p0: THREE.Vector3,
+          n: THREE.Vector3,
+          eps: number,
+        ): THREE.Vector3[][] => {
+          const out: THREE.Vector3[][] = []
+          const capPts: THREE.Vector3[] = []
+          for (const poly of faces) {
+            const d = poly.map((pt) => pt.clone().sub(p0).dot(n))
+            if (d.every((v) => v >= -eps)) {
+              out.push(poly)
+              continue
+            }
+            if (d.every((v) => v <= eps)) continue
+            const np: THREE.Vector3[] = []
+            for (let i = 0; i < poly.length; i++) {
+              const j = (i + 1) % poly.length
+              if (d[i] >= -eps) np.push(poly[i])
+              if ((d[i] > eps && d[j] < -eps) || (d[i] < -eps && d[j] > eps)) {
+                const ip = poly[i].clone().lerp(poly[j], d[i] / (d[i] - d[j]))
+                np.push(ip)
+                capPts.push(ip)
+              }
+            }
+            if (np.length >= 3) out.push(np)
+          }
+          if (capPts.length >= 3) {
+            const c = capPts
+              .reduce((acc, pt) => acc.add(pt), new THREE.Vector3())
+              .multiplyScalar(1 / capPts.length)
+            const ref =
+              Math.abs(n.x) < 0.9 ? new THREE.Vector3(1, 0, 0) : new THREE.Vector3(0, 1, 0)
+            const e1 = new THREE.Vector3().crossVectors(n, ref).normalize()
+            const e2 = new THREE.Vector3().crossVectors(n, e1)
+            const sorted = capPts
+              .map((pt) => {
+                const rel = pt.clone().sub(c)
+                return { pt, a: Math.atan2(rel.dot(e2), rel.dot(e1)) }
+              })
+              .sort((x, y) => x.a - y.a)
+              .map((x) => x.pt)
+            const cap: THREE.Vector3[] = []
+            for (const pt of sorted) {
+              if (cap.length === 0 || cap[cap.length - 1].distanceToSquared(pt) > eps * eps) {
+                cap.push(pt)
+              }
+            }
+            if (cap.length >= 3) out.push(cap)
+          }
+          return out
+        }
+
         for (const eid of keptEdges) {
           const e = model.edges[eid]
           const a3 = toThree(model.vertices[e.v0].position, radius)
@@ -214,9 +280,6 @@ export function buildDomeGroup(
           const dir = b3.clone().sub(a3)
           const len = dir.length()
           dir.normalize()
-          const pull = miterStruts ? 0 : Math.min(endOffset, len * 0.33)
-          const aP = a3.clone().addScaledVector(dir, pull)
-          const bP = b3.clone().addScaledVector(dir, -pull)
           const mid = a3.clone().add(b3).multiplyScalar(0.5)
           const explode =
             explodeDist > 0
@@ -225,33 +288,55 @@ export function buildDomeGroup(
           const radial = mid.clone().normalize()
           const zAxis = radial.clone().addScaledVector(dir, -dir.dot(radial)).normalize()
           const xAxis = new THREE.Vector3().crossVectors(dir, zAxis)
-          // Timber-plate: project each end's 4 corners along the strut axis
-          // onto the plane through the pulled-back end with the hub-axis
-          // normal. Mitered: cut each corner at the DEEPER of the two
-          // neighbor seam planes through the vertex.
-          const endCorners = (endPt: THREE.Vector3, vid: number, into: THREE.Vector3) => {
-            const corners: THREE.Vector3[] = []
-            const planes = miterStruts
-              ? seamNormals(vid, eid).map((n) => ({ n, p: endPt }))
-              : [{ n: axisThree(vid), p: endPt }]
-            // Exact wedge ridge: where the two seam planes intersect, the
-            // end cap folds — two quads meeting on this line mate perfectly
-            // with the neighbor struts (a flat quad leaves a pinhole).
-            let ridge: [THREE.Vector3, THREE.Vector3] | null = null
-            if (miterStruts && planes.length === 2) {
-              const r = new THREE.Vector3().crossVectors(planes[0].n, planes[1].n)
-              if (r.lengthSq() > 1e-8) {
-                r.normalize()
-                const rz = r.dot(zAxis)
-                if (Math.abs(rz) > 0.1) {
-                  const sTop = Math.max(-len * 0.25, Math.min(len * 0.25, d2 / rz))
-                  ridge = [
-                    endPt.clone().addScaledVector(r, sTop).add(explode),
-                    endPt.clone().addScaledVector(r, -sTop).add(explode),
-                  ]
-                }
+
+          if (miterStruts) {
+            // Box extended past both vertices, then clipped by each end's
+            // seam half-spaces (fallback: a flat butt cut at the vertex).
+            const ext = Math.min(len * 0.3, section.width * 2.5)
+            const corner = (endPt: THREE.Vector3, sx: number, sz: number) =>
+              endPt
+                .clone()
+                .addScaledVector(xAxis, sx * w2)
+                .addScaledVector(zAxis, sz * d2)
+            const aE = a3.clone().addScaledVector(dir, -ext)
+            const bE = b3.clone().addScaledVector(dir, ext)
+            const A = [corner(aE, 1, 1), corner(aE, -1, 1), corner(aE, -1, -1), corner(aE, 1, -1)]
+            const B = [corner(bE, 1, 1), corner(bE, -1, 1), corner(bE, -1, -1), corner(bE, 1, -1)]
+            let solid: THREE.Vector3[][] = [
+              [A[0], A[3], A[2], A[1]],
+              [B[0], B[1], B[2], B[3]],
+              [A[0], B[0], B[1], A[1]],
+              [A[1], B[1], B[2], A[2]],
+              [A[2], B[2], B[3], A[3]],
+              [A[3], B[3], B[0], A[0]],
+            ]
+            const eps = len * 1e-7
+            for (const [vertexPos, vid, into] of [
+              [a3, e.v0, dir],
+              [b3, e.v1, dir.clone().negate()],
+            ] as const) {
+              const seams = seamNormals(vid, eid)
+              const planes = seams.length > 0 ? seams : [into.clone()]
+              for (const n of planes) {
+                // Keep the half-space containing the strut body.
+                const oriented =
+                  mid.clone().sub(vertexPos).dot(n) < 0 ? n.clone().negate() : n.clone()
+                solid = clipSolid(solid, vertexPos, oriented, eps)
               }
             }
+            for (const poly of solid) pushPoly(poly, eid, explode)
+            continue
+          }
+
+          // Timber-plate: hexahedron, end faces ⊥ the hub axis at the
+          // pulled-back end points.
+          const pull = Math.min(endOffset, len * 0.33)
+          const aP = a3.clone().addScaledVector(dir, pull)
+          const bP = b3.clone().addScaledVector(dir, -pull)
+          const endCorners = (endPt: THREE.Vector3, vid: number) => {
+            const corners: THREE.Vector3[] = []
+            const axis = axisThree(vid)
+            const denom = axis.dot(dir)
             for (const [sx, sz] of [
               [1, 1],
               [-1, 1],
@@ -262,46 +347,18 @@ export function buildDomeGroup(
                 .clone()
                 .addScaledVector(xAxis, sx * w2)
                 .addScaledVector(zAxis, sz * d2)
-              // Mitered: the corner sits where its ray exits BOTH neighbor
-              // half-spaces — negative t extends the member past the vertex
-              // so adjacent faces meet exactly on the seam plane (no gap).
-              let tCut = miterStruts ? -Infinity : 0
-              for (const { n, p } of planes) {
-                const denom = n.dot(into)
-                if (Math.abs(denom) < 0.05) continue
-                const t = n.dot(p.clone().sub(c0)) / denom
-                tCut = miterStruts
-                  ? Math.max(tCut, t)
-                  : Math.max(-section.width * 3, Math.min(section.width * 3, t))
-              }
-              if (!Number.isFinite(tCut)) tCut = 0
-              if (miterStruts) tCut = Math.max(-len * 0.2, Math.min(tCut, len * 0.45))
-              corners.push(c0.addScaledVector(into, tCut).add(explode))
+              let tShift = Math.abs(denom) > 0.05 ? axis.dot(endPt.clone().sub(c0)) / denom : 0
+              tShift = Math.max(-section.width * 3, Math.min(section.width * 3, tShift))
+              corners.push(c0.addScaledVector(dir, tShift))
             }
-            return { corners, ridge }
+            return corners
           }
-          const A = endCorners(aP, e.v0, dir)
-          const B = endCorners(bP, e.v1, dir.clone().negate())
-          const quad = (p0: THREE.Vector3, p1: THREE.Vector3, p2: THREE.Vector3, p3: THREE.Vector3) => {
-            positions.push(p0.x, p0.y, p0.z, p1.x, p1.y, p1.z, p2.x, p2.y, p2.z)
-            positions.push(p0.x, p0.y, p0.z, p2.x, p2.y, p2.z, p3.x, p3.y, p3.z)
-            faceMap.push(eid, eid)
-          }
-          // End caps: folded along the seam ridge when it exists (mitered),
-          // flat otherwise. Corner order: 0(+w,+d) 1(−w,+d) 2(−w,−d) 3(+w,−d);
-          // the ridge runs from the +d face to the −d face between them.
-          const cap = (c: THREE.Vector3[], ridge: [THREE.Vector3, THREE.Vector3] | null) => {
-            if (ridge) {
-              quad(c[0], ridge[0], ridge[1], c[3])
-              quad(ridge[0], c[1], c[2], ridge[1])
-            } else {
-              quad(c[0], c[3], c[2], c[1])
-            }
-          }
-          cap(A.corners, A.ridge)
-          cap(B.corners, B.ridge)
+          const A = endCorners(aP, e.v0)
+          const B = endCorners(bP, e.v1)
+          pushPoly([A[0], A[3], A[2], A[1]], eid, explode)
+          pushPoly([B[0], B[1], B[2], B[3]], eid, explode)
           for (let i = 0; i < 4; i++) {
-            quad(A.corners[i], B.corners[i], B.corners[(i + 1) % 4], A.corners[(i + 1) % 4])
+            pushPoly([A[i], B[i], B[(i + 1) % 4], A[(i + 1) % 4]], eid, explode)
           }
         }
         const bgeo = new THREE.BufferGeometry()

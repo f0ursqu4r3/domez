@@ -11,6 +11,7 @@ import { planPanels } from '../panels'
 import { buildRiser, orderedBaseRing } from '../riser'
 import { projectJson, parseProjectJson } from '../exports/json'
 import { generateZome } from '../zome'
+import { hubAxes } from '../hubs'
 import { formatFeetInches, formatInchesFractional, roundToIncrement } from '../units'
 import { cross, dot, sub, add, length } from '../vec'
 
@@ -1248,5 +1249,27 @@ describe('zome project settings', () => {
     expect(parsed.zomeSides).toBe(8)
     expect(parsed.zomePitchDeg).toBe(52)
     expect(parsed.zomeRows).toBe(4)
+  })
+})
+
+describe('hub axes', () => {
+  it('geodesic axes point along the vertex radial', () => {
+    const m = generateDome({ frequency: 3, fraction: '1/2', baseMode: 'leveled' })
+    const axes = hubAxes(m)
+    expect(axes.length).toBe(m.vertices.length)
+    for (const v of m.vertices) {
+      const a = axes[v.id]
+      expect(Math.hypot(a[0], a[1], a[2])).toBeCloseTo(1, 9)
+      const p = v.position
+      const pl = Math.hypot(p[0], p[1], p[2])
+      expect((a[0] * p[0] + a[1] * p[1] + a[2] * p[2]) / pl).toBeGreaterThan(0.9)
+    }
+  })
+
+  it('zome apex axis is +z', () => {
+    const z = generateZome({ sides: 8, pitchDeg: 45, rows: 4, baseMode: 'leveled' })
+    const axes = hubAxes(z)
+    const apex = z.vertices.reduce((a, b) => (a.position[2] > b.position[2] ? a : b))
+    expect(axes[apex.id][2]).toBeCloseTo(1, 6)
   })
 })

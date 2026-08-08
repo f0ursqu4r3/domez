@@ -19,8 +19,24 @@ export interface PanelType {
   sheets: number
 }
 
+/** Rectangular sheathing pieces (riser wall segments) in the sheet plan. */
+export interface RectPanelType {
+  /** R1, R2, ... smallest-area first. */
+  label: string
+  count: number
+  w: number
+  h: number
+  /** One piece, w × h. */
+  area: number
+  /** 0 = seamed. */
+  perSheet: number
+  seamed: boolean
+  sheets: number
+}
+
 export interface PanelPlan {
   types: PanelType[]
+  rects: RectPanelType[]
   sheetW: number
   sheetL: number
   sheetLabel: string
@@ -39,10 +55,19 @@ export interface PanelPlanOptions {
   /** Faces not skinned: doorway cuts, windows, vents, painted openings. */
   excludeFaceIds?: Set<number>
   skinFactor: 1 | 2
+  /** Rectangular pieces to nest alongside the triangles (riser sheathing). */
+  rects?: { w: number; h: number }[]
 }
 
 /** Waste allowance for seamed (multi-piece) panels. */
 const SEAM_WASTE = 1.3
+
+function rectsPerSheet(w: number, h: number, sheetW: number, sheetL: number): number {
+  let best = 0
+  if (w <= sheetW && h <= sheetL) best = Math.max(best, Math.floor(sheetW / w) * Math.floor(sheetL / h))
+  if (w <= sheetL && h <= sheetW) best = Math.max(best, Math.floor(sheetL / w) * Math.floor(sheetW / h))
+  return best
+}
 
 function fitsPerSheet(base: number, height: number, sheetW: number, sheetL: number): number {
   let best = 0
@@ -106,11 +131,34 @@ export function planPanels(model: DomeModel, radius: number, opts: PanelPlanOpti
       }
     })
 
-  const totalPanels = types.reduce((n, t) => n + t.count, 0)
-  const totalPanelArea = types.reduce((n, t) => n + t.area * t.count, 0)
-  const totalSheets = types.reduce((n, t) => n + t.sheets, 0)
+  // Rectangular pieces (riser wall sheathing) nest as plain grids.
+  const rectGroups = new Map<string, { w: number; h: number; count: number }>()
+  for (const r of opts.rects ?? []) {
+    const key = `${r.w.toFixed(3)}:${r.h.toFixed(3)}`
+    const g = rectGroups.get(key) ?? { w: r.w, h: r.h, count: 0 }
+    g.count++
+    rectGroups.set(key, g)
+  }
+  const rects: RectPanelType[] = [...rectGroups.values()]
+    .sort((a, b) => a.w * a.h - b.w * b.h)
+    .map((g, i) => {
+      const count = g.count * opts.skinFactor
+      const area = g.w * g.h
+      const perSheet = rectsPerSheet(g.w, g.h, opts.sheetW, opts.sheetL)
+      const seamed = perSheet === 0
+      const sheets = seamed
+        ? Math.ceil((count * area * SEAM_WASTE) / sheetArea)
+        : Math.ceil(count / perSheet)
+      return { label: `R${i + 1}`, count, w: g.w, h: g.h, area, perSheet, seamed, sheets }
+    })
+
+  const totalPanels = types.reduce((n, t) => n + t.count, 0) + rects.reduce((n, t) => n + t.count, 0)
+  const totalPanelArea =
+    types.reduce((n, t) => n + t.area * t.count, 0) + rects.reduce((n, t) => n + t.area * t.count, 0)
+  const totalSheets = types.reduce((n, t) => n + t.sheets, 0) + rects.reduce((n, t) => n + t.sheets, 0)
   return {
     types,
+    rects,
     sheetW: opts.sheetW,
     sheetL: opts.sheetL,
     sheetLabel: opts.sheetLabel,

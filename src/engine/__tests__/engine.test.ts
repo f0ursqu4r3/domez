@@ -942,3 +942,41 @@ describe('riser wall in the cut list', () => {
     expect(result.best).not.toBeNull()
   })
 })
+
+describe('riser sheathing rectangles in the panel plan', () => {
+  const model = generateDome({ frequency: 3, fraction: '1/2', baseMode: 'leveled' })
+  const sheet = { sheetW: 48, sheetL: 96, sheetLabel: '4×8 ft sheet' }
+
+  it('groups equal rects, nests them, and counts sheets', () => {
+    const rects = [
+      { w: 60, h: 24 },
+      { w: 60, h: 24 },
+      { w: 60, h: 24 },
+      { w: 45.5, h: 24 },
+    ]
+    const plan = planPanels(model, 150, { ...sheet, skinFactor: 1, rects })
+    expect(plan.rects.length).toBe(2)
+    const r60 = plan.rects.find((r) => Math.abs(r.w - 60) < 1e-6)!
+    expect(r60.count).toBe(3)
+    // 60 along the 96 side, 24 along 48: floor(96/60)=1 × floor(48/24)=2 → 2/sheet.
+    expect(r60.perSheet).toBe(2)
+    expect(r60.seamed).toBe(false)
+    expect(r60.sheets).toBe(Math.ceil(3 / r60.perSheet))
+    // Totals include the rects.
+    const solo = planPanels(model, 150, { ...sheet, skinFactor: 1 })
+    expect(plan.totalSheets).toBe(solo.totalSheets + plan.rects.reduce((n, r) => n + r.sheets, 0))
+  })
+
+  it('doubles rect counts with two skins and flags oversize as seamed', () => {
+    const plan = planPanels(model, 150, { ...sheet, skinFactor: 2, rects: [{ w: 60, h: 24 }] })
+    expect(plan.rects[0].count).toBe(2)
+    const big = planPanels(model, 150, { ...sheet, skinFactor: 1, rects: [{ w: 120, h: 60 }] })
+    expect(big.rects[0].seamed).toBe(true)
+    expect(big.rects[0].sheets).toBeGreaterThanOrEqual(2)
+  })
+
+  it('is absent-safe: no rects option → empty array', () => {
+    const a = planPanels(model, 150, { ...sheet, skinFactor: 1 })
+    expect(a.rects).toEqual([])
+  })
+})

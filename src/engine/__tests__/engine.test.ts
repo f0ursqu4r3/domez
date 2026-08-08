@@ -14,6 +14,8 @@ import { miterCsv } from '../exports/csv'
 import { cutTemplatesSvg, boardDiagramsSvg } from '../exports/templates'
 import { buildBom, estimateCost, defaultPrice } from '../bom'
 import { costsCsv } from '../exports/csv'
+import { assemblyGuideSvg } from '../exports/guide'
+import { buildAssemblyPlan } from '../assembly'
 import { generateZome } from '../zome'
 import { hubAxes } from '../hubs'
 import { miterCuts } from '../miter'
@@ -1582,5 +1584,45 @@ describe('costs csv', () => {
     expect(csv).toContain('Unit price ($)')
     expect(csv).toContain('Total ($)')
     expect(csv.split('\n').length).toBeGreaterThan(est.lines.length)
+  })
+})
+
+describe('assembly guide', () => {
+  const model = generateDome({ frequency: 3, fraction: '1/2', baseMode: 'leveled' })
+  const plan = buildAssemblyPlan(model)
+  const cl = buildCutList(model, {
+    radius: 150,
+    increment: 1 / 8,
+    endOffset: 1.5,
+    units: 'imperial',
+  })
+
+  it('renders a cover plus one page per course', () => {
+    const svg = assemblyGuideSvg(model, plan, cl, { units: 'imperial', radius: 150, title: 'test' })
+    const pages = svg.match(/data-course-page/g) ?? []
+    expect(pages.length).toBe(plan.courses.length)
+    expect(svg).toContain('width="8.5in"')
+    expect(svg).toContain(String(cl.totalStruts))
+    expect(svg).toContain(formatInchesFractional(cl.rows[0].roundedCutLength))
+    const marks = svg.match(/data-new-strut/g) ?? []
+    expect(marks.length).toBe(
+      plan.courses.reduce((n, c) => n + c.ringStrutIds.length + c.riserStrutIds.length, 0),
+    )
+  })
+
+  it('a doored dome renders with excluded struts absent', () => {
+    const doors = cutDoorways(model, [{ id: 'D1', azimuthDeg: 0, width: 48, height: 90 }], 150, {
+      minStubLength: 6,
+    })
+    const dPlan = buildAssemblyPlan(model, new Set([...doors.removedEdges, ...doors.trimmedEdges]))
+    const svg = assemblyGuideSvg(model, dPlan, cl, {
+      units: 'imperial',
+      radius: 150,
+      title: 'test',
+    })
+    const marks = svg.match(/data-new-strut/g) ?? []
+    expect(marks.length).toBe(
+      dPlan.courses.reduce((n, c) => n + c.ringStrutIds.length + c.riserStrutIds.length, 0),
+    )
   })
 })

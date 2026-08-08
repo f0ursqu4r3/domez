@@ -5,15 +5,8 @@ import type { DomeModel, UnitSystem } from '../types'
 import { formatLength } from '../units'
 import { miterCuts } from '../miter'
 import { strutColor } from './svg'
+import { PAPER, esc } from './paper'
 
-/** Paper geometry in working units (1 SVG user unit = 1 in / 1 mm). */
-const PAPER = {
-  imperial: { w: 8.5, h: 11, unit: 'in', cal: 3, calLabel: '3 in', margin: 0.5 },
-  metric: { w: 210, h: 297, unit: 'mm', cal: 75, calLabel: '75 mm', margin: 12 },
-} as const
-
-const esc = (s: string | number) =>
-  String(s).replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;')
 
 export interface TemplateOptions {
   units: UnitSystem

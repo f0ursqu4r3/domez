@@ -1084,3 +1084,48 @@ describe('zome generator — natural base', () => {
     expect(maxR).toBeCloseTo(1, 9)
   })
 })
+
+describe('zome generator — leveled base', () => {
+  const m = generateZome({ sides: 8, pitchDeg: 45, rows: 4, baseMode: 'leveled' })
+
+  it('fills the zigzag: +n triangles, +n base chords, two strut types', () => {
+    expect(m.vertices.length).toBe(1 + 8 * 5)
+    expect(m.edges.length).toBe(2 * 8 * 5) // 2n(R+1)
+    expect(m.faces.length).toBe(2 * 8 * 4 + 8) // 2nR + n
+    expect(m.strutTypes.length).toBe(2)
+    const chordType = m.strutTypes.find((t) => t.count === 8)!
+    for (const eid of chordType.edgeIds) {
+      const e = m.edges[eid]
+      // Base chords are horizontal, at the lowest row.
+      expect(m.vertices[e.v0].position[2]).toBeCloseTo(m.cutZ, 9)
+      expect(m.vertices[e.v1].position[2]).toBeCloseTo(m.cutZ, 9)
+    }
+  })
+
+  it('has a planar 8-hub base ring the riser can walk', () => {
+    const baseVerts = m.vertices.filter((v) => v.isBase)
+    expect(baseVerts.length).toBe(8)
+    expect(orderedBaseRing(m).length).toBe(8)
+    const riser = buildRiser(m, 150, {
+      height: 24,
+      studSpacing: 16,
+      memberWidth: 1.5,
+      minStubLength: 6,
+    })!
+    expect(riser).not.toBeNull()
+    expect(riser.segments.length).toBe(8)
+  })
+
+  it('natural zome cannot take a riser (zigzag)', () => {
+    const nat = generateZome({ sides: 8, pitchDeg: 45, rows: 4, baseMode: 'natural' })
+    expect(
+      buildRiser(nat, 150, { height: 24, studSpacing: 16, memberWidth: 1.5, minStubLength: 6 }),
+    ).toBeNull()
+  })
+
+  it('half-rhombus triangles carry three real edges', () => {
+    const halfTris = m.faces.slice(2 * 8 * 4)
+    expect(halfTris.length).toBe(8)
+    for (const f of halfTris) expect(f.edgeIds.length).toBe(3)
+  })
+})

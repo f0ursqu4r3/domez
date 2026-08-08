@@ -15,7 +15,7 @@ const props = defineProps<{
 }>()
 
 const project = useDomeProject()
-const { state } = project
+const { state, workingRiserHeight } = project
 
 const MM_PER_INCH = 25.4
 const smallUnit = computed(() => (state.units === 'imperial' ? 'in' : 'mm'))
@@ -102,7 +102,7 @@ function remove() {
         <FieldLabel class="text-xs">Sill ({{ smallUnit }})</FieldLabel>
         <Input
           type="number" min="1" step="1" class="font-mono h-8"
-          title="Height of the opening bottom above the base plane"
+          title="Height of the opening bottom above the floor"
           :model-value="toDisplay(sillEntry.sillMm)"
           @update:model-value="(v) => { const n = Number(v); if (n > 0) sillEntry!.sillMm = fromDisplay(n) }"
         />
@@ -182,7 +182,18 @@ function remove() {
       </template>
     </p>
 
-    <p v-if="!info.fits" class="flex items-center gap-1.5 text-xs text-destructive">
+    <p v-if="info.riserConflict" class="flex items-center gap-1.5 text-xs text-destructive">
+      <TriangleAlert class="size-3.5 shrink-0" />
+      <template v-if="kind === 'door'">
+        Door is shorter than the riser wall — make it taller than
+        {{ formatLength(workingRiserHeight, state.units) }}.
+      </template>
+      <template v-else>
+        Window dips into the riser — raise the sill above
+        {{ formatLength(workingRiserHeight + (info.margin ?? 0), state.units) }}.
+      </template>
+    </p>
+    <p v-else-if="!info.fits" class="flex items-center gap-1.5 text-xs text-destructive">
       <TriangleAlert class="size-3.5 shrink-0" />
       Opening doesn't fit inside the shell — reduce width, height{{
         kind === 'window' ? ', or sill height' : ''

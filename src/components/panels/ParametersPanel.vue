@@ -22,7 +22,8 @@ import {
 import { Zap } from '@lucide/vue'
 
 const project = useDomeProject()
-const { state, increments, availableStock, jointMethod, diameter, endOffset, kerf } = project
+const { state, increments, availableStock, jointMethod, diameter, endOffset, kerf, riserHeight } =
+  project
 
 const frequency = computed({
   get: () => String(state.frequency),
@@ -85,6 +86,32 @@ const best = computed(() => state.optimizer.result?.best ?? null)
             :model-value="state.baseMode === 'leveled'"
             @update:model-value="(v: boolean) => (state.baseMode = v ? 'leveled' : 'natural')"
           />
+        </Field>
+        <Field>
+          <FieldLabel
+            >Riser wall <span class="text-muted-foreground">({{ smallUnit }})</span></FieldLabel
+          >
+          <Input
+            type="number"
+            step="1"
+            min="0"
+            class="font-mono"
+            :disabled="state.baseMode !== 'leveled'"
+            :model-value="riserHeight"
+            @update:model-value="
+              (v) => {
+                const n = Number(v)
+                if (n >= 0) riserHeight = n
+              }
+            "
+          />
+          <FieldDescription>
+            {{
+              state.baseMode === 'leveled'
+                ? 'Stud-framed knee wall under the base ring — 0 for none. Doors cut through it; plates, studs, and sheathing join the takeoff.'
+                : 'Level the base to add a riser wall.'
+            }}
+          </FieldDescription>
         </Field>
         <Field>
           <FieldLabel

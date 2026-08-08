@@ -1215,3 +1215,38 @@ describe('portals on a zome', () => {
     expect(placed.after.score).toBeLessThanOrEqual(placed.before.score + 1e-9)
   })
 })
+
+describe('zome project settings', () => {
+  it('round-trips mode and zome params through the project file', () => {
+    const m = generateZome({ sides: 8, pitchDeg: 45, rows: 4, baseMode: 'leveled' })
+    const cl = buildCutList(m, { radius: 150, increment: 1 / 8, endOffset: 0, units: 'imperial' })
+    const pk = packCuts(cl, { kerf: 0, stock: [{ length: 144, label: '12 ft' }] })
+    const text = projectJson(
+      {
+        frequency: 5,
+        fraction: '5/8',
+        baseMode: 'leveled',
+        diameter: 26,
+        units: 'imperial',
+        material: 'lumber-2x4',
+        jointMethod: 'timber-plate',
+        endOffset: 0,
+        increment: 1 / 8,
+        kerf: 0,
+        stock: [],
+        mode: 'zome',
+        zomeSides: 8,
+        zomePitchDeg: 52,
+        zomeRows: 4,
+      },
+      m,
+      cl,
+      pk,
+    )
+    const parsed = parseProjectJson(text)!
+    expect(parsed.mode).toBe('zome')
+    expect(parsed.zomeSides).toBe(8)
+    expect(parsed.zomePitchDeg).toBe(52)
+    expect(parsed.zomeRows).toBe(4)
+  })
+})

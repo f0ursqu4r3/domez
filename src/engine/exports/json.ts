@@ -31,6 +31,12 @@ export interface ProjectSettings {
   panelPlacement?: string
   /** Riser (knee) wall height under the base ring, canonical mm. 0/absent = none. */
   riserHeightMm?: number
+  /** Structure family: geodesic (default) or zome. */
+  mode?: string
+  /** Zome parameters (polar zonohedron). */
+  zomeSides?: number
+  zomePitchDeg?: number
+  zomeRows?: number
 }
 
 /** Round-trippable project file: settings drive the app; derived data is

@@ -19,6 +19,7 @@ import {
 } from '@/engine/doorway'
 import { planPanels } from '@/engine/panels'
 import { buildRiser } from '@/engine/riser'
+import { generateZome } from '@/engine/zome'
 import { diameterToWorking, IMPERIAL_INCREMENTS, METRIC_INCREMENTS } from '@/engine/units'
 import type { Fraction, Frequency, UnitSystem } from '@/engine/types'
 import { cutListCsv, hubsCsv, boardsCsv, openingsCsv, panelsCsv } from '@/engine/exports/csv'
@@ -134,9 +135,20 @@ const MM_PER_METER = 1000
 
 interface ProjectState {
   units: UnitSystem
+  /** Structure family. Geodesic settings and zome settings are independent
+   * fields, so switching modes round-trips losslessly. */
+  mode: 'geodesic' | 'zome'
   frequency: Frequency
   fraction: Fraction
+  /** Shared by both modes: geodesic = slide boundary hubs onto the cut
+   * plane; zome = fill the zigzag rim with half-rhombi + base chords. */
   baseMode: 'natural' | 'leveled'
+  /** Zome: generators around the axis (4..16). */
+  zomeSides: number
+  /** Zome: generator pitch off the axis, degrees (20..70). */
+  zomePitchDeg: number
+  /** Zome: rhombus bands kept from the apex (1..sides-2). */
+  zomeRows: number
   /** Physical quantities are stored canonically in millimeters, so unit
    * switching never changes the actual dome (no display-rounding drift). */
   diameterMm: number
@@ -195,9 +207,13 @@ interface ProjectState {
 
 const state = reactive<ProjectState>({
   units: 'imperial',
+  mode: 'geodesic',
   frequency: 5,
   fraction: '5/8',
   baseMode: 'natural',
+  zomeSides: 8,
+  zomePitchDeg: 45,
+  zomeRows: 4,
   diameterMm: 26 * MM_PER_FOOT,
   endOffsetMm: 1.5 * MM_PER_INCH,
   kerfMm: (1 / 8) * MM_PER_INCH,
@@ -302,8 +318,24 @@ watch(
   { flush: 'sync' },
 )
 
+// Fewer sides ⇒ fewer possible rows; keep the kept-bands count valid.
+watch(
+  () => state.zomeSides,
+  (n) => {
+    state.zomeRows = Math.max(1, Math.min(n - 2, state.zomeRows))
+  },
+  { flush: 'sync' },
+)
+
 const model = computed(() =>
-  generateDome({ frequency: state.frequency, fraction: state.fraction, baseMode: state.baseMode }),
+  state.mode === 'zome'
+    ? generateZome({
+        sides: state.zomeSides,
+        pitchDeg: state.zomePitchDeg,
+        rows: state.zomeRows,
+        baseMode: state.baseMode,
+      })
+    : generateDome({ frequency: state.frequency, fraction: state.fraction, baseMode: state.baseMode }),
 )
 
 // A new model invalidates edge/vertex/face ids; drop stale selection and
@@ -333,7 +365,9 @@ const workingKerf = computed(() =>
 
 /** Riser height in working units — active only on a leveled, truncated base. */
 const workingRiserHeight = computed(() =>
-  state.baseMode === 'leveled' && state.fraction !== 'full' && state.riserHeightMm > 0
+  state.baseMode === 'leveled' &&
+  (state.mode === 'zome' || state.fraction !== 'full') &&
+  state.riserHeightMm > 0
     ? state.units === 'imperial'
       ? state.riserHeightMm / MM_PER_INCH
       : state.riserHeightMm
@@ -467,6 +501,21 @@ const panelSheet = computed(() =>
 const panelPlan = computed(() => {
   const exclude = new Set<number>(doorway.value.removedFaces)
   for (const key of Object.keys(state.openings)) exclude.add(Number(key))
+  // Zome rhombi never take the triangle path: surviving ones (no cut, no
+  // painted opening on either half) join as whole rhombic pieces.
+  const rhombs: { d1: number; d2: number }[] = []
+  if (model.value.rhombi) {
+    for (const rh of model.value.rhombi) {
+      const dead = rh.faceIds.some((fid) => exclude.has(fid))
+      rh.faceIds.forEach((fid) => exclude.add(fid))
+      if (dead) continue
+      const [t, a, b, sv] = rh.vertexIds.map((vi) => model.value.vertices[vi].position)
+      rhombs.push({
+        d1: Math.hypot(t[0] - b[0], t[1] - b[1], t[2] - b[2]) * radius.value,
+        d2: Math.hypot(a[0] - sv[0], a[1] - sv[1], a[2] - sv[2]) * radius.value,
+      })
+    }
+  }
   return planPanels(model.value, radius.value, {
     sheetW: panelSheet.value.w,
     sheetL: panelSheet.value.l,
@@ -474,6 +523,7 @@ const panelPlan = computed(() => {
     excludeFaceIds: exclude,
     skinFactor: state.panelPlacement === 'both' ? 2 : 1,
     rects: riser.value?.sheathingRects,
+    rhombs,
   })
 })
 
@@ -482,10 +532,15 @@ const panelPlan = computed(() => {
 function paintFace(faceId: number) {
   if (state.openingTool === 'off' || state.openingTool === 'door' || state.openingTool === 'window')
     return
-  if (state.openingTool === 'erase') {
-    delete state.openings[faceId]
-  } else {
-    state.openings[faceId] = state.openingTool
+  // Zome rhombi paint as a unit: apply to both triangle halves.
+  const rh = model.value.rhombi?.find((r) => r.faceIds.includes(faceId))
+  const targets = rh ? rh.faceIds : [faceId]
+  for (const fid of targets) {
+    if (state.openingTool === 'erase') {
+      delete state.openings[fid]
+    } else {
+      state.openings[fid] = state.openingTool
+    }
   }
   state.highlightOpening = null
 }
@@ -624,10 +679,13 @@ function download(filename: string, content: string | Blob, type = 'text/plain')
   URL.revokeObjectURL(url)
 }
 
-const fileStem = computed(
-  () =>
-    `domez-${state.frequency}v-${state.fraction.replace('/', '')}-${diameter.value}${state.units === 'imperial' ? 'ft' : 'm'}`,
-)
+const fileStem = computed(() => {
+  const family =
+    state.mode === 'zome'
+      ? `z${state.zomeSides}-${state.zomePitchDeg}deg`
+      : `${state.frequency}v-${state.fraction.replace('/', '')}`
+  return `domez-${family}-${diameter.value}${state.units === 'imperial' ? 'ft' : 'm'}`
+})
 
 const projectSettings = computed(() => ({
   frequency: state.frequency,
@@ -646,6 +704,10 @@ const projectSettings = computed(() => ({
   windows: state.framedWindows.map((w) => ({ ...w })),
   panelPlacement: state.panelPlacement,
   riserHeightMm: state.riserHeightMm,
+  mode: state.mode,
+  zomeSides: state.zomeSides,
+  zomePitchDeg: state.zomePitchDeg,
+  zomeRows: state.zomeRows,
 }))
 
 const exporters = {
@@ -709,7 +771,11 @@ const exporters = {
 }
 
 function titleOf() {
-  return `DOMEZ ${state.frequency}V ${state.fraction} · ⌀ ${diameter.value} ${state.units === 'imperial' ? 'ft' : 'm'}`
+  const family =
+    state.mode === 'zome'
+      ? `Z${state.zomeSides} ${state.zomePitchDeg}°`
+      : `${state.frequency}V ${state.fraction}`
+  return `DOMEZ ${family} · ⌀ ${diameter.value} ${state.units === 'imperial' ? 'ft' : 'm'}`
 }
 
 function loadProjectFile(text: string): boolean {
@@ -719,6 +785,17 @@ function loadProjectFile(text: string): boolean {
   state.frequency = settings.frequency as Frequency
   state.fraction = settings.fraction as Fraction
   state.baseMode = (settings.baseMode as 'natural' | 'leveled') ?? 'natural'
+  state.mode = settings.mode === 'zome' ? 'zome' : 'geodesic'
+  if (typeof settings.zomeSides === 'number' && settings.zomeSides >= 4 && settings.zomeSides <= 16)
+    state.zomeSides = Math.round(settings.zomeSides)
+  if (
+    typeof settings.zomePitchDeg === 'number' &&
+    settings.zomePitchDeg >= 20 &&
+    settings.zomePitchDeg <= 70
+  )
+    state.zomePitchDeg = settings.zomePitchDeg
+  if (typeof settings.zomeRows === 'number' && settings.zomeRows >= 1)
+    state.zomeRows = Math.max(1, Math.min(state.zomeSides - 2, Math.round(settings.zomeRows)))
   state.materialId = settings.material
   // Sync watchers fire on units/materialId/jointId; set explicit values
   // after them (jointId before endOffset, or the joint-default reset would
@@ -802,9 +879,13 @@ const STORAGE_KEY = 'domez-project-v1'
 function persistedSlice() {
   return {
     units: state.units,
+    mode: state.mode,
     frequency: state.frequency,
     fraction: state.fraction,
     baseMode: state.baseMode,
+    zomeSides: state.zomeSides,
+    zomePitchDeg: state.zomePitchDeg,
+    zomeRows: state.zomeRows,
     diameterMm: state.diameterMm,
     endOffsetMm: state.endOffsetMm,
     kerfMm: state.kerfMm,
@@ -844,6 +925,7 @@ function restorePersisted() {
     if ([1, 2, 3, 4, 5, 6].includes(p.frequency as number)) state.frequency = p.frequency as Frequency
     if (['3/8', '1/2', '5/8'].includes(p.fraction as string)) state.fraction = p.fraction as Fraction
     if (p.baseMode === 'natural' || p.baseMode === 'leveled') state.baseMode = p.baseMode
+    if (p.mode === 'geodesic' || p.mode === 'zome') state.mode = p.mode
     if (MATERIALS.some((m) => m.id === p.materialId)) state.materialId = p.materialId as string
     if (JOINT_METHODS.some((j) => j.id === p.jointId)) state.jointId = p.jointId as JointMethodId
     const num = (v: unknown, ok: (n: number) => boolean) =>
@@ -864,6 +946,11 @@ function restorePersisted() {
     state.trueSize = !!p.trueSize
     state.closeDoorways = p.closeDoorways !== false
     state.riserHeightMm = num(p.riserHeightMm, (n) => n >= 0) ?? state.riserHeightMm
+    const sides = num(p.zomeSides, (v) => v >= 4 && v <= 16)
+    if (sides !== undefined) state.zomeSides = Math.round(sides)
+    state.zomePitchDeg = num(p.zomePitchDeg, (v) => v >= 20 && v <= 70) ?? state.zomePitchDeg
+    const zr = num(p.zomeRows, (v) => v >= 1)
+    if (zr !== undefined) state.zomeRows = Math.max(1, Math.min(state.zomeSides - 2, Math.round(zr)))
     if (['outside', 'inside', 'both'].includes(p.panelPlacement as string)) {
       state.panelPlacement = p.panelPlacement as 'outside' | 'inside' | 'both'
     }
@@ -946,9 +1033,13 @@ function resetProject() {
     // Best-effort.
   }
   state.units = 'imperial'
+  state.mode = 'geodesic'
   state.frequency = 5
   state.fraction = '5/8'
   state.baseMode = 'natural'
+  state.zomeSides = 8
+  state.zomePitchDeg = 45
+  state.zomeRows = 4
   state.materialId = 'lumber-2x4'
   state.jointId = 'timber-plate'
   state.diameterMm = 26 * MM_PER_FOOT

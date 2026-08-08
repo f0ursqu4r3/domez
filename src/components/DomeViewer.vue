@@ -63,21 +63,44 @@ function rebuildGround() {
   groundGroup = new THREE.Group()
   const r = radius.value
   const grid = new THREE.PolarGridHelper(r * 1.6, 12, 8, 48, 0x2a3648, 0x1a2230)
-  grid.position.y = -0.001 * r
+  // The floor sits at the dome's base plane, not the sphere equator.
+  grid.position.y = model.value.cutZ * r - 0.001 * r
   groundGroup.add(grid)
   scene.add(groundGroup)
 }
 
-function frameCamera() {
-  if (!camera || !controls) return
-  const r = radius.value
+function updateProjection(r: number) {
+  if (!camera) return
   if (scene) scene.fog = new THREE.Fog(0x0a0e15, r * 6, r * 24)
-  camera.position.set(r * 2.1, r * 1.35, r * 2.1)
   camera.near = r / 100
   camera.far = r * 40
   camera.updateProjectionMatrix()
-  controls.target.set(0, r * (model.value.unitHeight / 2 - Math.max(0, -model.value.cutZ)) * 0.9, 0)
+}
+
+/** Initial framing only — later parameter changes preserve the user's orbit. */
+function frameCamera() {
+  if (!camera || !controls) return
+  const r = radius.value
+  updateProjection(r)
+  camera.position.set(r * 2.1, r * 1.35, r * 2.1)
+  controls.target.set(0, r * (model.value.cutZ + model.value.unitHeight / 2), 0)
   controls.update()
+}
+
+/** On radius change (diameter edit, unit flip) scale the orbit with the
+ * dome so the view stays put instead of resetting. */
+let prevRadius = 0
+function adjustCameraForRadius() {
+  if (!camera || !controls) return
+  const r = radius.value
+  if (prevRadius > 0 && Math.abs(r - prevRadius) > 1e-9) {
+    const scale = r / prevRadius
+    camera.position.multiplyScalar(scale)
+    controls.target.multiplyScalar(scale)
+    updateProjection(r)
+    controls.update()
+  }
+  prevRadius = r
 }
 
 function onPointerDown(ev: PointerEvent) {
@@ -162,6 +185,7 @@ onMounted(() => {
   rebuildGround()
   rebuildDome()
   frameCamera()
+  prevRadius = radius.value
 
   renderer.domElement.addEventListener('pointerdown', onPointerDown)
   renderer.domElement.addEventListener('pointerup', onPointerUp)
@@ -187,7 +211,7 @@ onMounted(() => {
 watch([model, radius], () => {
   rebuildDome()
   rebuildGround()
-  frameCamera()
+  adjustCameraForRadius()
 })
 watch(
   () => [

@@ -651,6 +651,134 @@ function loadProjectFile(text: string): boolean {
   return true
 }
 
+// ---- Persistence: the project survives page refreshes ----------------------
+
+const STORAGE_KEY = 'domez-project-v1'
+
+function persistedSlice() {
+  return {
+    units: state.units,
+    frequency: state.frequency,
+    fraction: state.fraction,
+    baseMode: state.baseMode,
+    diameterMm: state.diameterMm,
+    endOffsetMm: state.endOffsetMm,
+    kerfMm: state.kerfMm,
+    materialId: state.materialId,
+    jointId: state.jointId,
+    increment: state.increment,
+    disabledStock: { ...state.disabledStock },
+    viewMode: state.viewMode,
+    explode: state.explode,
+    trueSize: state.trueSize,
+    openings: { ...state.openings },
+    doors: state.doors.map((d) => ({ ...d })),
+    closeDoorways: state.closeDoorways,
+    panelPlacement: state.panelPlacement,
+    optimizerMin: state.optimizer.min,
+    optimizerMax: state.optimizer.max,
+  }
+}
+
+/** Restore a saved session. Field order matters: the sync watchers on
+ * units/material/joint reset dependent values, and the model watcher clears
+ * openings — so geometry and identity fields go first, values after. */
+function restorePersisted() {
+  if (typeof localStorage === 'undefined') return
+  let p: Record<string, unknown>
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY)
+    if (!raw) return
+    p = JSON.parse(raw)
+  } catch {
+    return
+  }
+  try {
+    if (p.units === 'imperial' || p.units === 'metric') state.units = p.units
+    if ([3, 4, 5, 6].includes(p.frequency as number)) state.frequency = p.frequency as Frequency
+    if (['3/8', '1/2', '5/8'].includes(p.fraction as string)) state.fraction = p.fraction as Fraction
+    if (p.baseMode === 'natural' || p.baseMode === 'leveled') state.baseMode = p.baseMode
+    if (MATERIALS.some((m) => m.id === p.materialId)) state.materialId = p.materialId as string
+    if (JOINT_METHODS.some((j) => j.id === p.jointId)) state.jointId = p.jointId as JointMethodId
+    const num = (v: unknown, ok: (n: number) => boolean) =>
+      typeof v === 'number' && Number.isFinite(v) && ok(v) ? v : undefined
+    state.diameterMm = num(p.diameterMm, (n) => n > 0) ?? state.diameterMm
+    state.endOffsetMm = num(p.endOffsetMm, (n) => n >= 0) ?? state.endOffsetMm
+    state.kerfMm = num(p.kerfMm, (n) => n >= 0) ?? state.kerfMm
+    state.increment = num(p.increment, (n) => n > 0) ?? state.increment
+    if (p.disabledStock && typeof p.disabledStock === 'object') {
+      state.disabledStock = Object.fromEntries(
+        Object.entries(p.disabledStock as Record<string, unknown>).map(([k, v]) => [k, !!v]),
+      )
+    }
+    if (['assembly', 'frame', 'surface', 'exploded'].includes(p.viewMode as string)) {
+      state.viewMode = p.viewMode as ViewMode
+    }
+    state.explode = num(p.explode, (n) => n >= 0 && n <= 1) ?? state.explode
+    state.trueSize = !!p.trueSize
+    state.closeDoorways = p.closeDoorways !== false
+    if (['outside', 'inside', 'both'].includes(p.panelPlacement as string)) {
+      state.panelPlacement = p.panelPlacement as 'outside' | 'inside' | 'both'
+    }
+    state.optimizer.min = num(p.optimizerMin, (n) => n > 0) ?? state.optimizer.min
+    state.optimizer.max = num(p.optimizerMax, (n) => n > 0) ?? state.optimizer.max
+    state.doors = Array.isArray(p.doors)
+      ? (p.doors as Record<string, unknown>[])
+          .filter(
+            (d) =>
+              typeof d?.azimuthDeg === 'number' &&
+              typeof d?.widthMm === 'number' &&
+              (d.widthMm as number) > 0 &&
+              typeof d?.heightMm === 'number' &&
+              (d.heightMm as number) > 0,
+          )
+          .map((d) => ({
+            azimuthDeg: d.azimuthDeg as number,
+            widthMm: d.widthMm as number,
+            heightMm: d.heightMm as number,
+            depthMm: typeof d.depthMm === 'number' ? d.depthMm : 0,
+            marginMm: typeof d.marginMm === 'number' && d.marginMm > 0 ? d.marginMm : 0,
+          }))
+      : state.doors
+    // Openings last: the geometry fields above may have cleared them via the
+    // model watcher; validate face ids against the restored model.
+    if (p.openings && typeof p.openings === 'object') {
+      const openings: OpeningAssignments = {}
+      const faceCount = model.value.faces.length
+      for (const [key, type] of Object.entries(p.openings as Record<string, unknown>)) {
+        const fid = Number(key)
+        if (
+          Number.isInteger(fid) &&
+          fid >= 0 &&
+          fid < faceCount &&
+          (type === 'window' || type === 'door' || type === 'vent')
+        ) {
+          openings[fid] = type
+        }
+      }
+      state.openings = openings
+    }
+    state.selection = null
+    state.openingTool = 'off'
+    state.highlightOpening = null
+  } catch {
+    // A malformed save never blocks startup.
+  }
+}
+
+restorePersisted()
+
+watch(
+  () => JSON.stringify(persistedSlice()),
+  (json) => {
+    try {
+      localStorage.setItem(STORAGE_KEY, json)
+    } catch {
+      // Storage full/unavailable — persistence is best-effort.
+    }
+  },
+)
+
 export function useDomeProject() {
   return {
     state,

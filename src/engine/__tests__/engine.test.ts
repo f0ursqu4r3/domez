@@ -1161,3 +1161,57 @@ describe('rhombus panels in the sheet plan', () => {
     expect(planPanels(model, 150, { ...sheet, skinFactor: 1 }).rhombs).toEqual([])
   })
 })
+
+describe('portals on a zome', () => {
+  const m = generateZome({ sides: 10, pitchDeg: 45, rows: 5, baseMode: 'leveled' })
+  const radius = 150
+
+  it('cuts a doorway: trims land on envelope planes, closure builds', () => {
+    const cut = cutDoorways(m, [{ id: 'D1', azimuthDeg: 18, width: 40, height: 80 }], radius, {
+      minStubLength: 6,
+      studSpacing: 16,
+    })
+    const d = cut.doors[0]
+    expect(d.fits).toBe(true)
+    expect(cut.removedEdges.size + cut.trimmedEdges.size).toBeGreaterThan(0)
+    expect(d.closureProfile).not.toBeNull()
+    expect(d.closureFraming.length).toBeGreaterThan(0)
+    // Every trimmed cut end sits on an envelope boundary plane or a hub.
+    const az = (18 * Math.PI) / 180
+    const ux = Math.cos(az)
+    const uy = Math.sin(az)
+    const hw = 20
+    const z0 = m.cutZ * radius
+    for (const t of cut.trimmed) {
+      for (const p of [t.aUnit, t.bUnit]) {
+        const x = p[0] * radius
+        const y = p[1] * radius
+        const z = p[2] * radius
+        const tt = -uy * x + ux * y
+        const u = ux * x + uy * y
+        const onPlane =
+          Math.abs(Math.abs(tt) - hw) < 1e-6 ||
+          Math.abs(z - z0 - 80) < 1e-6 ||
+          Math.abs(u - d.framePlaneDist) < 1e-6 ||
+          m.vertices.some(
+            (v) =>
+              Math.hypot(
+                v.position[0] * radius - x,
+                v.position[1] * radius - y,
+                v.position[2] * radius - z,
+              ) < 1e-6,
+          )
+        expect(onPlane).toBe(true)
+      }
+    }
+  })
+
+  it('windows and the placement optimizer work', () => {
+    const win = { id: 'W1', azimuthDeg: 90, width: 30, height: 30, sillHeight: 40 }
+    const cut = cutDoorways(m, [win], radius, { minStubLength: 6 })
+    expect(cut.doors[0].fits).toBe(true)
+    const placed = optimizeDoorPlacement(m, win, radius, { minStubLength: 6, increment: 1 / 8 })
+    expect(placed.evaluated).toBeGreaterThan(100)
+    expect(placed.after.score).toBeLessThanOrEqual(placed.before.score + 1e-9)
+  })
+})

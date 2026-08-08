@@ -6,12 +6,13 @@ import { buildCutList, JOINT_METHODS } from '../cutlist'
 import { packCuts } from '../packing'
 import { optimizeDiameter } from '../optimize'
 import { analyzeOpenings } from '../openings'
-import { cutDoorways, optimizeDoorPlacement } from '../doorway'
+import { cutDoorways, emptyDoorwayCut, optimizeDoorPlacement } from '../doorway'
 import { planPanels } from '../panels'
 import { buildRiser, orderedBaseRing } from '../riser'
 import { projectJson, parseProjectJson } from '../exports/json'
 import { miterCsv } from '../exports/csv'
 import { cutTemplatesSvg, boardDiagramsSvg } from '../exports/templates'
+import { buildBom, estimateCost, defaultPrice } from '../bom'
 import { generateZome } from '../zome'
 import { hubAxes } from '../hubs'
 import { miterCuts } from '../miter'
@@ -1445,5 +1446,114 @@ describe('fabrication drawings', () => {
       kerf: 0,
     })
     expect(empty).toContain('<svg')
+  })
+})
+
+describe('hardware BOM', () => {
+  const model = generateDome({ frequency: 3, fraction: '1/2', baseMode: 'leveled' })
+  const noDoors = emptyDoorwayCut()
+  const plan = planPanels(model, 150, {
+    sheetW: 48,
+    sheetL: 96,
+    sheetLabel: '4×8 ft sheet',
+    skinFactor: 1,
+  })
+  const V = model.vertices.length
+  const E = model.edges.length
+  const baseHubs = model.vertices.filter((v) => v.isBase).length
+
+  it('hub method: connectors by valence, bolt per strut end', () => {
+    const bom = buildBom(model, noDoors, null, 'hub', plan)
+    const connectors = bom.filter((l) => l.key === 'hub-connector')
+    expect(connectors.reduce((n, l) => n + l.quantity, 0)).toBe(V)
+    expect(bom.find((l) => l.key === 'bolt')!.quantity).toBe(2 * E)
+    expect(bom.find((l) => l.key === 'washer')!.quantity).toBe(4 * E)
+    expect(bom.find((l) => l.key === 'anchor')!.quantity).toBe(baseHubs)
+    expect(bom.find((l) => l.key === 'screw-panel')!.quantity).toBeGreaterThan(0)
+  })
+
+  it('pipe: one stack bolt per vertex; plate/mitered: 2 screws per end', () => {
+    const pipe = buildBom(model, noDoors, null, 'flattened-pipe', plan)
+    expect(pipe.find((l) => l.key === 'bolt')!.quantity).toBe(V)
+    const plate = buildBom(model, noDoors, null, 'timber-plate', plan)
+    expect(plate.filter((l) => l.key === 'hub-plate').reduce((n, l) => n + l.quantity, 0)).toBe(V)
+    expect(plate.find((l) => l.key === 'screw-structural')!.quantity).toBe(2 * 2 * E)
+    const mitered = buildBom(model, noDoors, null, 'mitered', plan)
+    expect(mitered.find((l) => l.key === 'screw-structural')!.quantity).toBe(2 * 2 * E)
+    expect(mitered.find((l) => l.key === 'glue-seam')!.quantity).toBe(
+      model.vertices.reduce((n, v) => n + v.edgeIds.length, 0),
+    )
+  })
+
+  it('doorway and riser adjust counts', () => {
+    const doors = cutDoorways(model, [{ id: 'D1', azimuthDeg: 0, width: 48, height: 90 }], 150, {
+      minStubLength: 6,
+      studSpacing: 16,
+    })
+    const riser = buildRiser(model, 150, {
+      height: 24,
+      studSpacing: 16,
+      memberWidth: 1.5,
+      minStubLength: 6,
+      doors: [{ id: 'D1', azimuthDeg: 0, width: 48, height: 90 }],
+    })!
+    const bom = buildBom(model, doors, riser, 'hub', plan)
+    const connectors = bom.filter((l) => l.key === 'hub-connector')
+    expect(connectors.reduce((n, l) => n + l.quantity, 0)).toBe(V - doors.removedVertices.size)
+    const framingJoints =
+      doors.doors.reduce((n, d) => n + d.closureJointCount, 0) + riser.jointCount
+    expect(bom.find((l) => l.key === 'screw-framing')!.quantity).toBe(3 * framingJoints)
+    expect(bom.find((l) => l.key === 'anchor')!.quantity).toBe(riser.segments.length)
+  })
+})
+
+describe('cost estimate', () => {
+  const model = generateDome({ frequency: 3, fraction: '1/2', baseMode: 'leveled' })
+  const plan = planPanels(model, 150, {
+    sheetW: 48,
+    sheetL: 96,
+    sheetLabel: '4×8 ft sheet',
+    skinFactor: 1,
+  })
+  const bom = buildBom(model, emptyDoorwayCut(), null, 'timber-plate', plan)
+  const base = {
+    boardCounts: [{ stockLabel: '12 ft', count: 30 }],
+    totalSheets: plan.totalSheets,
+    sheetLabel: plan.sheetLabel,
+    bom,
+    floorArea: Math.PI * (model.unitBaseRadius * 150) ** 2,
+    units: 'imperial' as const,
+  }
+
+  it('prices with defaults, overrides win, unknown labels go unpriced', () => {
+    const est = estimateCost({ ...base, prices: {} })
+    const boards = est.lines.find((l) => l.key === 'stock:12 ft')!
+    expect(boards.priceEach).toBe(defaultPrice('stock:12 ft', '12 ft', 'imperial'))
+    expect(boards.total).toBeCloseTo(boards.priceEach * 30, 9)
+    expect(est.total).toBeGreaterThan(0)
+    expect(est.perArea).toBeCloseTo(est.total / (base.floorArea / 144), 9)
+
+    const withOverride = estimateCost({ ...base, prices: { 'stock:12 ft': 9.99 } })
+    expect(withOverride.lines.find((l) => l.key === 'stock:12 ft')!.priceEach).toBe(9.99)
+
+    const weird = estimateCost({
+      ...base,
+      prices: {},
+      boardCounts: [{ stockLabel: '3.14 m', count: 5 }],
+    })
+    const line = weird.lines.find((l) => l.key === 'stock:3.14 m')!
+    expect(line.unpriced).toBe(true)
+    expect(weird.unpricedCount).toBeGreaterThan(0)
+    expect(weird.total).toBe(
+      weird.lines.filter((l) => !l.unpriced).reduce((n, l) => n + l.total, 0),
+    )
+  })
+
+  it('glue seams are informational, not unpriced', () => {
+    const mBom = buildBom(model, emptyDoorwayCut(), null, 'mitered', plan)
+    const est = estimateCost({ ...base, bom: mBom, prices: {} })
+    const glue = est.lines.find((l) => l.key === 'glue-seam')!
+    expect(glue.total).toBe(0)
+    expect(glue.unpriced).toBe(false)
   })
 })

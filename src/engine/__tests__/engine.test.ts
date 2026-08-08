@@ -10,6 +10,7 @@ import { cutDoorways, optimizeDoorPlacement } from '../doorway'
 import { planPanels } from '../panels'
 import { buildRiser, orderedBaseRing } from '../riser'
 import { projectJson, parseProjectJson } from '../exports/json'
+import { generateZome } from '../zome'
 import { formatFeetInches, formatInchesFractional, roundToIncrement } from '../units'
 import { cross, dot, sub, add, length } from '../vec'
 
@@ -1030,5 +1031,56 @@ describe('1V and 2V kits', () => {
     expect(cfs[0]).toBeCloseTo(0.546533, 5)
     expect(cfs[1]).toBeCloseTo(0.618034, 5)
     expect(m.cutZ).toBeCloseTo(0, 9)
+  })
+})
+
+describe('zome generator — natural base', () => {
+  const m = generateZome({ sides: 8, pitchDeg: 45, rows: 4, baseMode: 'natural' })
+
+  it('satisfies polar-zonohedron counts', () => {
+    expect(m.vertices.length).toBe(1 + 8 * 5) // 1 + n(R+1)
+    expect(m.edges.length).toBe(8 * 9) // n(2R+1)
+    expect(m.faces.length).toBe(2 * 8 * 4) // 2nR
+    expect(m.rhombi!.length).toBe(8 * 4) // nR
+  })
+
+  it('every strut identical at any pitch', () => {
+    for (const pitch of [25, 45, 65]) {
+      const z = generateZome({ sides: 8, pitchDeg: pitch, rows: 4, baseMode: 'natural' })
+      expect(z.strutTypes.length).toBe(1)
+      const cf = z.strutTypes[0].chordFactor
+      for (const e of z.edges) expect(e.chordFactor).toBeCloseTo(cf, 9)
+    }
+  })
+
+  it('rows are planar and the rim zigzags between two planes', () => {
+    const zs = new Set(m.vertices.map((v) => Math.round(v.position[2] * 1e6)))
+    expect(zs.size).toBe(6) // rows 0..5
+    const baseVerts = m.vertices.filter((v) => v.isBase)
+    const baseZs = new Set(baseVerts.map((v) => Math.round(v.position[2] * 1e6)))
+    expect(baseZs.size).toBe(2) // zigzag: sides row + tips row
+    expect(baseVerts.length).toBe(16)
+  })
+
+  it('faces wind outward and pitch trades height for width', () => {
+    const centerZ = m.cutZ + m.unitHeight / 2
+    for (const f of m.faces) {
+      const [a, b, c] = f.vertexIds.map((vi) => m.vertices[vi].position)
+      const n = cross(sub(b, a), sub(c, a))
+      const cen = [
+        (a[0] + b[0] + c[0]) / 3,
+        (a[1] + b[1] + c[1]) / 3,
+        (a[2] + b[2] + c[2]) / 3 - centerZ,
+      ] as const
+      expect(dot(n, cen)).toBeGreaterThan(0)
+    }
+    const tall = generateZome({ sides: 8, pitchDeg: 25, rows: 4, baseMode: 'natural' })
+    const squat = generateZome({ sides: 8, pitchDeg: 65, rows: 4, baseMode: 'natural' })
+    expect(tall.unitHeight).toBeGreaterThan(squat.unitHeight)
+  })
+
+  it('normalizes the widest kept row to unit radius', () => {
+    const maxR = Math.max(...m.vertices.map((v) => Math.hypot(v.position[0], v.position[1])))
+    expect(maxR).toBeCloseTo(1, 9)
   })
 })

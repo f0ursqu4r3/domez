@@ -90,6 +90,11 @@ export interface DomeModel {
   unitHeight: number
   /** Radius of the base perimeter ring for unit radius. */
   unitBaseRadius: number
+  /** Rhombic-face pairing for zome models: each rhombus and its two
+   * triangulated faces. Absent on geodesic models. */
+  rhombi?: { vertexIds: [number, number, number, number]; faceIds: [number, number] }[]
+  /** Zome generation params echo (absent on geodesic models). */
+  zome?: { sides: number; pitchDeg: number; rows: number; leveled: boolean }
 }
 
 /** Full icosphere prior to truncation (used internally and for tests). */

@@ -100,15 +100,10 @@ export function solveTruss(
   let trace = 0
   for (let i = 0; i < nDof; i++) trace += K[i * nDof + i]
   const tol = 1e-9 * (trace / nDof)
-  let nSmallPivots = 0
   for (let j = 0; j < nDof; j++) {
     let d = K[j * nDof + j]
     for (let k = 0; k < j; k++) d -= K[j * nDof + k] ** 2
-    if (d <= tol) {
-      nSmallPivots++
-      if (d < 0) d = tol
-      else d = Math.max(d, tol)
-    }
+    if (d <= tol) return null
     d = Math.sqrt(d)
     K[j * nDof + j] = d
     for (let i = j + 1; i < nDof; i++) {
@@ -117,7 +112,6 @@ export function solveTruss(
       K[i * nDof + j] = s / d
     }
   }
-  if (nSmallPivots > 2) return null
 
   const forces = loadCases.map((full) => {
     // Reduce, solve LLᵀ x = f, expand, then member forces.

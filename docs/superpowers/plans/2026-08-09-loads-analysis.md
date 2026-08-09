@@ -61,23 +61,43 @@ describe('section properties', () => {
 })
 
 describe('truss solver', () => {
-  it('matches the textbook two-bar symmetric truss', () => {
+  it('matches the textbook square-pyramid truss', () => {
+    // NOTE: a 3D two-bar "textbook" truss is ill-posed here — the apex has
+    // zero stiffness out of plane, so K is legitimately singular. The
+    // pyramid constrains all three apex DOF.
     const nodes: [number, number, number][] = [
-      [-1, 0, 0],
-      [1, 0, 0],
+      [-1, -1, 0],
+      [1, -1, 0],
+      [1, 1, 0],
+      [-1, 1, 0],
       [0, 0, 1],
     ]
-    const members = [
-      { i: 0, j: 2, ea: 1e6 },
-      { i: 1, j: 2, ea: 1e6 },
-    ]
-    const load = new Float64Array(9)
-    load[2 * 3 + 2] = -1000 // apex, -z
-    const res = solveTruss(nodes, members, [true, true, false], [load])
+    const members = [0, 1, 2, 3].map((i) => ({ i, j: 4, ea: 1e6 }))
+    const load = new Float64Array(15)
+    load[4 * 3 + 2] = -1000 // apex, -z
+    const res = solveTruss(nodes, members, [true, true, true, true, false], [load])
     expect(res).not.toBeNull()
-    // Vertical equilibrium: 2 N sin45° = −1000 → N = −707.1 (compression)
-    expect(res!.forces[0][0]).toBeCloseTo(-1000 / (2 * Math.sin(Math.PI / 4)), 3)
-    expect(res!.forces[0][1]).toBeCloseTo(res!.forces[0][0], 6)
+    // Leg length √3, vertical component 1/√3: 4N/√3 = −1000 → N = −433.0
+    for (let m = 0; m < 4; m++) {
+      expect(res!.forces[0][m]).toBeCloseTo((-1000 * Math.sqrt(3)) / 4, 2)
+    }
+    // An unconstrained direction anywhere means mechanism — a two-bar
+    // planar truss in 3D must be REJECTED, not silently solved.
+    expect(
+      solveTruss(
+        [
+          [-1, 0, 0],
+          [1, 0, 0],
+          [0, 0, 1],
+        ],
+        [
+          { i: 0, j: 2, ea: 1e6 },
+          { i: 1, j: 2, ea: 1e6 },
+        ],
+        [true, true, false],
+        [new Float64Array(9)],
+      ),
+    ).toBeNull()
   })
 
   it('matches the tripod and reports mechanisms', () => {

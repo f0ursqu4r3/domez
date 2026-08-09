@@ -82,10 +82,10 @@ export function gridSpec(radius: number, units: UnitSystem): GridSpec
 
 ## Testing
 
-- vitest for `gridSpec`: 26 ft dome imperial → step 60 in (5 ft), rings
-  ≤ 16, radius = rings × step ≥ 1.6 × dome radius; tiny dome (3 ft) →
-  step 12 in; huge dome (120 ft) → step 120 in with rings ≤ 16 or capped
-  at largest step; metric equivalents (8 m dome → 1 m step).
+- vitest for `gridSpec`: 26 ft dome imperial → step 24 in (2 ft, 11
+  rings), radius = rings × step ≥ 1.6 × dome radius; tiny dome (3 ft) →
+  step 12 in; huge dome (120 ft) → step 120 in (10 rings); metric 8 m
+  dome → step 500 mm (13 rings).
 - Live browser verification: figure stands beside the dome at believable
   scale, billboards while orbiting (screenshots from two angles), toggle
   hides/shows it, persists across reload; grid rings land on clean

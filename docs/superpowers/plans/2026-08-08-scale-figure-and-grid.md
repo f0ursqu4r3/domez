@@ -282,10 +282,12 @@ function rebuildGround() {
 
   const h = state.units === 'imperial' ? 69 : 1750
   figureGroup = buildFigure(h)
+  // +z reads as front-left from the default diagonal camera: the figure
+  // stands before the dome, clear of the strut-legend overlay at the right.
   figureGroup.position.set(
-    Math.max(model.value.unitBaseRadius, 0.9) * r * 1.1 + 0.2 * h,
-    groundY,
     0,
+    groundY,
+    Math.max(model.value.unitBaseRadius, 0.9) * r * 1.1 + 0.2 * h,
   )
   figureGroup.visible = state.showFigure
   groundGroup.add(figureGroup)

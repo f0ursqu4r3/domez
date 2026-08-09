@@ -39,11 +39,14 @@ export function buildFigure(heightWorld: number): THREE.Group
 
 - Height: `state.units === 'imperial' ? 69 : 1750` (working units are
   inches/mm — the scene is already in working units).
-- Position: `x = max(model.unitBaseRadius, 0.9) * radius * 1.1 +
-  shoulder margin`, `z = 0`, feet on the foundation plane — the same y
-  the grid uses (`cutZ * r − riser`). Rebuilt in `rebuildGround()`
-  (radius/unit/riser changes already trigger it); visibility follows
-  `state.showFigure`.
+- Position: `z = max(unitBaseRadius, 0.9) * radius * 1.1 + 0.2 * height`,
+  `x = 0` (front-left from the default diagonal camera, clear of the
+  legend overlay; amended post-ship from +x during live verification),
+  feet on the foundation plane — the same y the grid uses (`cutZ * r −
+  riser`). Rebuilt in `rebuildGround()` (radius/unit/riser changes
+  already trigger it); visibility follows `state.showFigure`. Camera
+  framing: `frameCamera()` sets `camera.position.set(r * 2.35, r * 1.35,
+  r * 2.35)` — 2.35r keeps the scale figure inside the frame.
 - Billboard: in the render loop, `figure.rotation.y =
   Math.atan2(camera.position.x − figure.position.x, camera.position.z −
   figure.position.z)` — Y-only, no tilt.

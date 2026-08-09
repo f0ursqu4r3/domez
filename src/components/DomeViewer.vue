@@ -5,7 +5,7 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { useDomeProject } from '@/composables/useDomeProject'
 import { buildDomeGroup, type DomePickMaps } from '@/lib/three-builders'
 import { gridSpec } from '@/lib/scale'
-import { buildFigure } from '@/lib/figure'
+import { buildFigure, FIGURE_HEIGHT } from '@/lib/figure'
 
 const {
   state,
@@ -87,7 +87,7 @@ function rebuildGround() {
   grid.position.y = groundY
   groundGroup.add(grid)
 
-  const h = state.units === 'imperial' ? 69 : 1750
+  const h = FIGURE_HEIGHT[state.units]
   figureGroup = buildFigure(h)
   // +z reads as front-left from the default diagonal camera: the figure
   // stands before the dome, clear of the strut-legend overlay at the right.

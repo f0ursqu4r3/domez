@@ -1,6 +1,9 @@
 // src/lib/figure.ts
 import * as THREE from 'three'
 
+/** Standard scale-figure height by unit system, in working units. */
+export const FIGURE_HEIGHT = { imperial: 69, metric: 1750 } as const
+
 /**
  * Right-side body outline (x, y) in normalized units — head is a separate
  * circle so the whole figure spans exactly y ∈ [0, 1]. Left side is the
@@ -21,14 +24,19 @@ const RIGHT: [number, number][] = [
   [0, 0.4], // crotch (midline — not mirrored)
 ]
 
-/** Flat billboard person silhouette; scale-figure group, feet at y=0. */
-export function buildFigure(heightWorld: number): THREE.Group {
-  const pts = [
+/** Full silhouette outline (right side + mirrored left), for tests. */
+export function figureOutline(): [number, number][] {
+  return [
     ...RIGHT,
     ...RIGHT.slice(0, -1)
       .reverse()
       .map(([x, y]) => [-x, y] as [number, number]),
   ]
+}
+
+/** Flat billboard person silhouette; scale-figure group, feet at y=0. */
+export function buildFigure(heightWorld: number): THREE.Group {
+  const pts = figureOutline()
   const shape = new THREE.Shape(pts.map(([x, y]) => new THREE.Vector2(x, y)))
   const material = new THREE.MeshBasicMaterial({ color: 0x64748b, side: THREE.DoubleSide })
   const body = new THREE.Mesh(new THREE.ShapeGeometry(shape), material)

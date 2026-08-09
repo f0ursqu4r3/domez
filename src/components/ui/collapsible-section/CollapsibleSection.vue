@@ -18,7 +18,7 @@ const ui = useUiState()
   >
     <h3 class="section-title mb-0">
       <CollapsibleTrigger class="group flex w-full cursor-pointer items-center gap-2 text-left">
-        <span class="flex-1">{{ props.title }}</span>
+        <span class="flex-1 uppercase">{{ props.title }}</span>
         <slot name="badge" />
         <ChevronDown
           aria-hidden="true"

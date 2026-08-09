@@ -112,7 +112,8 @@ function frameCamera() {
   if (!camera || !controls) return
   const r = radius.value
   updateProjection(r)
-  camera.position.set(r * 2.1, r * 1.35, r * 2.1)
+  // 2.35 keeps the scale figure (at ~1.1× base radius) inside the frame.
+  camera.position.set(r * 2.35, r * 1.35, r * 2.35)
   controls.target.set(0, r * (model.value.cutZ + model.value.unitHeight / 2), 0)
   controls.update()
 }

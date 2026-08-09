@@ -9,13 +9,10 @@ import ViewModeBar from '@/components/ViewModeBar.vue'
 import StrutLegend from '@/components/StrutLegend.vue'
 import InspectorCard from '@/components/InspectorCard.vue'
 import ParametersPanel from '@/components/panels/ParametersPanel.vue'
-import StrutsPanel from '@/components/panels/StrutsPanel.vue'
-import HubsPanel from '@/components/panels/HubsPanel.vue'
-import MaterialsPanel from '@/components/panels/MaterialsPanel.vue'
-import CostsPanel from '@/components/panels/CostsPanel.vue'
-import AssemblyPanel from '@/components/panels/AssemblyPanel.vue'
+import PartsTab from '@/components/panels/PartsTab.vue'
+import MaterialsTab from '@/components/panels/MaterialsTab.vue'
+import BuildTab from '@/components/panels/BuildTab.vue'
 import OpeningsPanel from '@/components/panels/OpeningsPanel.vue'
-import ExportPanel from '@/components/panels/ExportPanel.vue'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { ScrollArea } from '@/components/ui/scroll-area'
 
@@ -150,38 +147,26 @@ const chips = computed(() => [
 
       <!-- Data panels -->
       <aside class="flex w-107.5 shrink-0 flex-col border-l border-border">
-        <Tabs default-value="struts" class="flex h-full min-h-0 flex-col gap-0">
+        <Tabs default-value="parts" class="flex h-full min-h-0 flex-col gap-0">
           <TabsList
             class="w-full justify-start rounded-none border-b border-border bg-transparent px-2 pt-1.5"
           >
-            <TabsTrigger value="struts" class="text-xs">Struts</TabsTrigger>
-            <TabsTrigger value="hubs" class="text-xs">Hubs</TabsTrigger>
+            <TabsTrigger value="parts" class="text-xs">Parts</TabsTrigger>
             <TabsTrigger value="openings" class="text-xs">Openings</TabsTrigger>
             <TabsTrigger value="materials" class="text-xs">Materials</TabsTrigger>
-            <TabsTrigger value="costs" class="text-xs">Costs</TabsTrigger>
-            <TabsTrigger value="assembly" class="text-xs">Assembly</TabsTrigger>
-            <TabsTrigger value="export" class="text-xs">Export</TabsTrigger>
+            <TabsTrigger value="build" class="text-xs">Build</TabsTrigger>
           </TabsList>
-          <TabsContent value="struts" class="min-h-0 flex-1"
-            ><ScrollArea class="h-full"><StrutsPanel /></ScrollArea
-          ></TabsContent>
-          <TabsContent value="hubs" class="min-h-0 flex-1"
-            ><ScrollArea class="h-full"><HubsPanel /></ScrollArea
+          <TabsContent value="parts" class="min-h-0 flex-1"
+            ><ScrollArea class="h-full"><PartsTab /></ScrollArea
           ></TabsContent>
           <TabsContent value="openings" class="min-h-0 flex-1"
             ><ScrollArea class="h-full"><OpeningsPanel /></ScrollArea
           ></TabsContent>
           <TabsContent value="materials" class="min-h-0 flex-1"
-            ><MaterialsPanel class="h-full"
-          /></TabsContent>
-          <TabsContent value="costs" class="min-h-0 flex-1"
-            ><ScrollArea class="h-full"><CostsPanel /></ScrollArea
+            ><ScrollArea class="h-full"><MaterialsTab /></ScrollArea
           ></TabsContent>
-          <TabsContent value="assembly" class="min-h-0 flex-1"
-            ><ScrollArea class="h-full"><AssemblyPanel /></ScrollArea
-          ></TabsContent>
-          <TabsContent value="export" class="min-h-0 flex-1"
-            ><ScrollArea class="h-full"><ExportPanel /></ScrollArea
+          <TabsContent value="build" class="min-h-0 flex-1"
+            ><ScrollArea class="h-full"><BuildTab /></ScrollArea
           ></TabsContent>
         </Tabs>
       </aside>

@@ -4,7 +4,6 @@ import { useDomeProject } from '@/composables/useDomeProject'
 import { formatLength } from '@/engine/units'
 import { strutColor } from '@/engine/exports/svg'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
-import { ScrollArea } from '@/components/ui/scroll-area'
 import { TriangleAlert } from '@lucide/vue'
 
 const { state, packing, material, cutList, panelPlan } = useDomeProject()
@@ -126,7 +125,7 @@ const stats = computed(() => [
       </div>
 
       <h4 class="text-xs uppercase tracking-widest text-muted-foreground">Cutting diagrams</h4>
-      <ScrollArea class="flex-1 min-h-0 pr-3">
+      <div class="pr-3">
         <div class="flex flex-col gap-1.5">
           <div v-for="(b, i) in packing.boards" :key="i" class="flex items-center gap-2">
             <span
@@ -155,7 +154,7 @@ const stats = computed(() => [
             </span>
           </div>
         </div>
-      </ScrollArea>
+      </div>
     </div>
   </div>
 </template>

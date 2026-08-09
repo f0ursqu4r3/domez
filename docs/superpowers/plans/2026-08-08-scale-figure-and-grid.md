@@ -147,10 +147,9 @@ import * as THREE from 'three'
 const RIGHT: [number, number][] = [
   [0.03, 0.855], // neck
   [0.15, 0.8], // shoulder
-  [0.16, 0.6], // upper arm
-  [0.14, 0.43], // hand
-  [0.105, 0.44], // inner wrist
-  [0.11, 0.5], // hip
+  [0.16, 0.58], // upper arm
+  [0.135, 0.42], // hand
+  [0.105, 0.42], // hand inner edge — tucks straight in, no re-entrant
   [0.1, 0.3], // thigh
   [0.08, 0.04], // ankle
   [0.12, 0.01], // toe

@@ -89,8 +89,10 @@ function rebuildGround() {
 
   const h = state.units === 'imperial' ? 69 : 1750
   figureGroup = buildFigure(h)
+  // -x puts the figure left of the dome in the default view, clear of the
+  // strut-legend overlay that occupies the lower right of the viewport.
   figureGroup.position.set(
-    Math.max(model.value.unitBaseRadius, 0.9) * r * 1.1 + 0.2 * h,
+    -(Math.max(model.value.unitBaseRadius, 0.9) * r * 1.1 + 0.2 * h),
     groundY,
     0,
   )

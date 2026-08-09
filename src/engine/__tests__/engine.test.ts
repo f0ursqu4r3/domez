@@ -1795,3 +1795,23 @@ describe('portals on a goldberg dome', () => {
     expect(cut.doors[0].closureProfile).not.toBeNull()
   })
 })
+
+describe('mitered joints on a goldberg dome', () => {
+  it('3-way hubs get sane Y-joint cheek angles', () => {
+    const m = generateGoldberg({ frequency: 2, fraction: '1/2', baseMode: 'natural' })
+    const cuts = miterCuts(m)
+    expect(cuts.length).toBe(m.edges.length)
+    for (const e of m.edges) {
+      for (const end of cuts[e.id]) {
+        // At a trivalent hub the two neighbors are the other two struts;
+        // cheeks are half the inter-strut angles — well inside (0°, 90°).
+        expect(end.leftSeamDeg).toBeGreaterThan(10)
+        expect(end.leftSeamDeg).toBeLessThan(90)
+        expect(end.rightSeamDeg).toBeGreaterThan(10)
+        expect(end.rightSeamDeg).toBeLessThan(90)
+      }
+    }
+    const csv = miterCsv(m, 'imperial', 150)
+    expect(csv.trim().split('\n').length).toBe(1 + m.edges.length * 2)
+  })
+})

@@ -21,9 +21,12 @@ added bracing carry the shape.
    (organic scalloped rim), `leveled` = straddling polygons clipped at the
    cut plane (trapezoid partials + a horizontal chord edge each → planar
    base ring, riser-ready).
-3. Mitered joint method is disabled for goldberg mode (3-way panel seams
-   are not a timber-miter situation); hub / timber-plate / flattened-pipe
-   render through the existing joint-accurate paths.
+3. ~~Mitered joint method is disabled for goldberg mode~~ **Reversed at
+   user request post-ship:** mitered is available on all structure
+   families. A 3-way mitered joint is an ordinary timber Y-joint; the
+   miter math and rendering are valence-agnostic, and the hex-rigidity
+   caveat applies to every joint method equally. All joints render
+   through the existing joint-accurate paths.
 
 ## Generator: `src/engine/goldberg.ts`
 

@@ -265,13 +265,9 @@ const best = computed(() => state.optimizer.result?.best ?? null)
             <SelectTrigger class="w-full"><SelectValue /></SelectTrigger>
             <SelectContent>
               <SelectGroup>
-                <SelectItem
-                  v-for="j in JOINT_METHODS"
-                  :key="j.id"
-                  :value="j.id"
-                  :disabled="state.mode === 'goldberg' && j.id === 'mitered'"
-                  >{{ j.label }}</SelectItem
-                >
+                <SelectItem v-for="j in JOINT_METHODS" :key="j.id" :value="j.id">{{
+                  j.label
+                }}</SelectItem>
               </SelectGroup>
             </SelectContent>
           </Select>

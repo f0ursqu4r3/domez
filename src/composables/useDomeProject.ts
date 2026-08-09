@@ -330,18 +330,6 @@ watch(
   { flush: 'sync' },
 )
 
-// Mitered is a timber technique for high-valence hubs — not a 3-way panel
-// seam. Entering goldberg mode falls back to the material's default joint.
-watch(
-  () => state.mode,
-  (mode) => {
-    if (mode === 'goldberg' && state.jointId === 'mitered') {
-      state.jointId = material.value.defaultJoint
-    }
-  },
-  { flush: 'sync' },
-)
-
 // Fewer sides ⇒ fewer possible rows; keep the kept-bands count valid.
 watch(
   () => state.zomeSides,

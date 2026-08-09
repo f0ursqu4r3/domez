@@ -5,6 +5,7 @@ import { JOINT_METHODS } from '@/engine/cutlist'
 import type { Fraction, Frequency } from '@/engine/types'
 import { formatLength } from '@/engine/units'
 import { Field, FieldDescription, FieldGroup, FieldLabel } from '@/components/ui/field'
+import { CollapsibleSection } from '@/components/ui/collapsible-section'
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -48,8 +49,7 @@ const best = computed(() => state.optimizer.result?.best ?? null)
 
 <template>
   <div class="flex flex-col gap-5 p-4">
-    <section>
-      <h3 class="section-title">Geometry</h3>
+    <CollapsibleSection id="left:geometry" title="Geometry">
       <FieldGroup class="gap-4">
         <Field>
           <FieldLabel>Structure</FieldLabel>
@@ -238,12 +238,11 @@ const best = computed(() => state.optimizer.result?.best ?? null)
           </ToggleGroup>
         </Field>
       </FieldGroup>
-    </section>
+    </CollapsibleSection>
 
     <Separator />
 
-    <section>
-      <h3 class="section-title">Material &amp; joints</h3>
+    <CollapsibleSection id="left:material" title="Material & joints">
       <FieldGroup class="gap-4">
         <Field>
           <FieldLabel>Strut material</FieldLabel>
@@ -310,12 +309,11 @@ const best = computed(() => state.optimizer.result?.best ?? null)
           />
         </Field>
       </FieldGroup>
-    </section>
+    </CollapsibleSection>
 
     <Separator />
 
-    <section>
-      <h3 class="section-title">Fabrication</h3>
+    <CollapsibleSection id="left:fabrication" title="Fabrication">
       <FieldGroup class="gap-4">
         <Field>
           <FieldLabel>Cut rounding</FieldLabel>
@@ -370,12 +368,11 @@ const best = computed(() => state.optimizer.result?.best ?? null)
           </div>
         </Field>
       </FieldGroup>
-    </section>
+    </CollapsibleSection>
 
     <Separator />
 
-    <section>
-      <h3 class="section-title">Diameter optimizer</h3>
+    <CollapsibleSection id="left:optimizer" title="Diameter optimizer">
       <FieldGroup class="gap-4">
         <div class="flex gap-3">
           <Field class="flex-1">
@@ -430,6 +427,6 @@ const best = computed(() => state.optimizer.result?.best ?? null)
           >
         </div>
       </FieldGroup>
-    </section>
+    </CollapsibleSection>
   </div>
 </template>

@@ -171,6 +171,8 @@ interface ProjectState {
   explode: number
   /** Render struts at their real cross-section instead of schematic sticks. */
   trueSize: boolean
+  /** Show the billboard scale figure beside the dome. */
+  showFigure: boolean
   /** Panel opening assignments: faceId -> window | vent (doors are parametric). */
   openings: OpeningAssignments
   /** Parametric doorways: position + physical size, canonical mm. Doors
@@ -234,6 +236,7 @@ const state = reactive<ProjectState>({
   viewMode: 'assembly',
   explode: 0.35,
   trueSize: false,
+  showFigure: true,
   openings: {},
   doors: [],
   framedWindows: [],
@@ -1054,6 +1057,7 @@ function persistedSlice() {
     viewMode: state.viewMode,
     explode: state.explode,
     trueSize: state.trueSize,
+    showFigure: state.showFigure,
     openings: { ...state.openings },
     doors: state.doors.map((d) => ({ ...d })),
     framedWindows: state.framedWindows.map((w) => ({ ...w })),
@@ -1104,6 +1108,7 @@ function restorePersisted() {
     }
     state.explode = num(p.explode, (n) => n >= 0 && n <= 1) ?? state.explode
     state.trueSize = !!p.trueSize
+    state.showFigure = p.showFigure !== false
     state.closeDoorways = p.closeDoorways !== false
     state.riserHeightMm = num(p.riserHeightMm, (n) => n >= 0) ?? state.riserHeightMm
     const sides = num(p.zomeSides, (v) => v >= 4 && v <= 16)
@@ -1220,6 +1225,7 @@ function resetProject() {
   state.viewMode = 'assembly'
   state.explode = 0.35
   state.trueSize = false
+  state.showFigure = true
   state.openings = {}
   state.doors = []
   state.framedWindows = []

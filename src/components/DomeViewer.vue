@@ -4,6 +4,8 @@ import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { useDomeProject } from '@/composables/useDomeProject'
 import { buildDomeGroup, type DomePickMaps } from '@/lib/three-builders'
+import { gridSpec } from '@/lib/scale'
+import { buildFigure } from '@/lib/figure'
 
 const {
   state,
@@ -27,6 +29,7 @@ let camera: THREE.PerspectiveCamera | null = null
 let controls: OrbitControls | null = null
 let domeGroup: THREE.Group | null = null
 let groundGroup: THREE.Group | null = null
+let figureGroup: THREE.Group | null = null
 let raf = 0
 let resizeObserver: ResizeObserver | null = null
 const raycaster = new THREE.Raycaster()
@@ -77,10 +80,22 @@ function rebuildGround() {
   }
   groundGroup = new THREE.Group()
   const r = radius.value
-  const grid = new THREE.PolarGridHelper(r * 1.6, 12, 8, 48, 0x2a3648, 0x1a2230)
+  const spec = gridSpec(r, state.units)
+  const grid = new THREE.PolarGridHelper(spec.radius, 12, spec.rings, 48, 0x2a3648, 0x1a2230)
   // The floor sits at the foundation: the base plane, dropped by the riser.
-  grid.position.y = model.value.cutZ * r - workingRiserHeight.value - 0.001 * r
+  const groundY = model.value.cutZ * r - workingRiserHeight.value - 0.001 * r
+  grid.position.y = groundY
   groundGroup.add(grid)
+
+  const h = state.units === 'imperial' ? 69 : 1750
+  figureGroup = buildFigure(h)
+  figureGroup.position.set(
+    Math.max(model.value.unitBaseRadius, 0.9) * r * 1.1 + 0.2 * h,
+    groundY,
+    0,
+  )
+  figureGroup.visible = state.showFigure
+  groundGroup.add(figureGroup)
   scene.add(groundGroup)
 }
 
@@ -240,6 +255,12 @@ onMounted(() => {
   const loop = () => {
     raf = requestAnimationFrame(loop)
     controls?.update()
+    if (figureGroup && camera) {
+      figureGroup.rotation.y = Math.atan2(
+        camera.position.x - figureGroup.position.x,
+        camera.position.z - figureGroup.position.z,
+      )
+    }
     if (renderer && scene && camera) renderer.render(scene, camera)
   }
   loop()
@@ -276,6 +297,12 @@ watch(
   ],
   () => rebuildDome(),
   { deep: true },
+)
+watch(
+  () => state.showFigure,
+  (v) => {
+    if (figureGroup) figureGroup.visible = v
+  },
 )
 
 onBeforeUnmount(() => {

@@ -55,5 +55,15 @@ const trueSizeTitle = computed(() => `Dimensionally accurate struts — ${materi
         True size
       </Toggle>
     </template>
+    <Separator orientation="vertical" class="h-5" />
+    <Toggle
+      :model-value="state.showFigure"
+      size="sm"
+      class="px-3 text-xs"
+      title="Show a 5′9″ / 175 cm person for scale"
+      @update:model-value="(v: boolean) => (state.showFigure = v)"
+    >
+      Figure
+    </Toggle>
   </div>
 </template>

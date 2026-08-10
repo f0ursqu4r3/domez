@@ -9,6 +9,7 @@ import { packCuts } from '../packing'
 import { buildBom } from '../bom'
 import { planPanels } from '../panels'
 import { framesCsv } from '../exports/csv'
+import { optimizeDiameter } from '../optimize'
 
 // Match the exact generator/param call shapes used in engine.test.ts, and
 // the actual empty-doorway helper name exported by doorway.ts (grep for the
@@ -143,5 +144,28 @@ describe('panel frames', () => {
     const lineCount = csv.split('\n').length
     const specCount = plan.types.reduce((n, t) => n + t.members.length, 0)
     expect(lineCount).toBe(1 + specCount)
+  })
+
+  it('optimizeDiameter scores framed-panel member rows, not plain struts', () => {
+    const m = generateDome({ frequency: 3, fraction: '1/2', baseMode: 'leveled' })
+    const range = {
+      minDiameter: 300,
+      maxDiameter: 312,
+      step: 12,
+      increment: 1 / 8,
+      // Nonzero end offset: strut-mode cut lengths subtract it; framed-panel
+      // member lengths (long-point) must not, per the joint's contract.
+      endOffset: 2,
+      kerf: 1 / 8,
+      stock: [{ length: 144, label: '12 ft' }],
+      units: 'imperial' as const,
+    }
+    const strutResult = optimizeDiameter(m, range)
+    const framedResult = optimizeDiameter(m, { ...range, jointId: 'framed-panel' as const })
+    expect(strutResult.best).not.toBeNull()
+    expect(framedResult.best).not.toBeNull()
+    // Interior members double vs. one strut per edge, and framed-panel
+    // ignores endOffset — the two runs must diverge measurably.
+    expect(framedResult.best!.boardsNeeded).not.toBe(strutResult.best!.boardsNeeded)
   })
 })

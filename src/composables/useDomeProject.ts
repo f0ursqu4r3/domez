@@ -796,6 +796,8 @@ function runOptimizer() {
         strutSectionWorking.value.kind === 'rect'
           ? strutSectionWorking.value.width
           : strutSectionWorking.value.diameter,
+      jointId: state.jointId,
+      doorway: doorway.value,
     })
   } finally {
     state.optimizer.running = false

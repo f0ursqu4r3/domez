@@ -1,7 +1,8 @@
 import type { DomeModel, UnitSystem } from './types'
-import { buildCutList } from './cutlist'
-import { cutDoorways, type DoorSpec } from './doorway'
+import { buildCutList, type JointMethodId } from './cutlist'
+import { cutDoorways, emptyDoorwayCut, type DoorSpec, type DoorwayCut } from './doorway'
 import { buildRiser } from './riser'
+import { buildPanelFrames } from './panelFrames'
 import { packCuts, type StockLength } from './packing'
 import { workingToDiameter } from './units'
 
@@ -30,6 +31,13 @@ export interface OptimizeOptions {
   riserHeight?: number
   /** Riser member width for king-stud offsets, working units. */
   riserMemberWidth?: number
+  /** Active joint method — when 'framed-panel', each candidate is scored on
+   * its frame member takeoff instead of plain strut rows. */
+  jointId?: JointMethodId
+  /** Fixed doorway cut (topology only — its removed/trimmed edge and face
+   * ids don't depend on radius) used to omit panels when scoring
+   * 'framed-panel' candidates. */
+  doorway?: DoorwayCut
 }
 
 export interface OptimizeCandidate {
@@ -82,16 +90,23 @@ export function optimizeDiameter(model: DomeModel, opts: OptimizeOptions): Optim
             doors: opts.doors,
           })
         : undefined
+    const candidateRadius = diameter / 2
+    const framePlan =
+      opts.jointId === 'framed-panel'
+        ? buildPanelFrames(model, candidateRadius, opts.units, opts.doorway ?? emptyDoorwayCut())
+        : null
     const cutList = buildCutList(
       model,
       {
-        radius: diameter / 2,
+        radius: candidateRadius,
         increment: opts.increment,
         endOffset: opts.endOffset,
         units: opts.units,
+        jointId: opts.jointId,
       },
       doorway,
       riser,
+      framePlan,
     )
     const packing = packCuts(cutList, { kerf: opts.kerf, stock: opts.stock })
     const meanError =

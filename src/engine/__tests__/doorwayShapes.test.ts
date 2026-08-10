@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { generateDome } from '../dome'
 import { cutDoorways } from '../doorway'
+import type { DomeModel } from '../types'
 
 const R = 156
 const dome = generateDome({ frequency: 3, fraction: '1/2', baseMode: 'leveled' })
@@ -97,5 +98,63 @@ describe('shaped cuts', () => {
     const legacy = Math.sqrt(R * R - Math.max((z0 + 80) ** 2, z0 ** 2) - 18 * 18)
     const cut = cutDoorways(dome, [spec], R, { minStubLength: 6 })
     expect(cut.doors[0].framePlaneDist).toBeCloseTo(legacy, 9)
+  })
+})
+
+describe('window bottom clip clamps to the base plane (regression)', () => {
+  // Real generateDome() models never have geometry below the base plane —
+  // every kept face has all three vertices at z ≥ cutZ by construction — so
+  // this bug is invisible to any test built on a real dome: the erroneous
+  // extra headroom below the base is never reached by real strut geometry.
+  // A minimal synthetic model with one strut that actually spans across the
+  // base plane is the only way to exercise the clamp directly.
+  // The synthetic strut sits at azimuthDeg 0 (ux=1, uy=0), so world (x, y)
+  // = (radial u, tangential t) directly — position [200, 0, z] / R puts it
+  // well beyond the buck plane radially, dead-center tangentially, spanning
+  // world z = −2 (below the base) to z = 10 (inside the window band).
+  const model: DomeModel = {
+    params: { frequency: 1, fraction: '1/2' },
+    vertices: [
+      { id: 0, position: [200 / R, 0, -2 / R], edgeIds: [0], hubTypeId: -1, isBase: false },
+      { id: 1, position: [200 / R, 0, 10 / R], edgeIds: [0], hubTypeId: -1, isBase: false },
+    ],
+    edges: [{ id: 0, v0: 0, v1: 1, chordFactor: 12 / R, typeId: 0, faceIds: [], dihedralDeg: NaN }],
+    faces: [],
+    strutTypes: [],
+    hubTypes: [],
+    cutZ: 0,
+    actualFraction: 0.5,
+    unitHeight: 1,
+    unitBaseRadius: 1,
+  }
+
+  it('a window (margin > sill, no riser) trims the strut exactly at the base, not below it', () => {
+    // Repro from review: sill 5, margin 6 → buckBottomRel − margin = −1.
+    // Legacy clamps the window's bottom clip to max(0, −1) = 0; the bug
+    // let the polygon's own (unclamped) bottom edge sink to hRel = −1.
+    const spec = { id: 'W1', azimuthDeg: 0, width: 24, height: 36, sillHeight: 5, margin: 6 }
+    const cut = cutDoorways(model, [spec], R, { minStubLength: 0.5 })
+    expect(cut.doors[0].fits).toBe(true)
+    // The strut runs from world z = −2 (below the base) to z = 10 (well
+    // inside the window). Only the below-base portion should survive.
+    expect(cut.trimmedEdges.size).toBe(1)
+    expect(cut.trimmed).toHaveLength(1)
+    const piece = cut.trimmed[0]
+    // Correct: survives from z = −2 up to the base plane (z = 0) → length 2.
+    // Buggy (unclamped): would survive only to z = −1 → length 1.
+    expect(piece.length).toBeCloseTo(2, 9)
+    expect(piece.bUnit[2] * R).toBeCloseTo(0, 9)
+    expect(piece.aUnit[2] * R).toBeCloseTo(-2, 9)
+  })
+
+  it('an equivalent riser-adjacent rect door (no window) is unaffected by the clamp', () => {
+    // Sanity check: the fix is window-only. A floor-standing door (no sill)
+    // already skips the bottom plane entirely (legacy zClipLow = -1e9), so
+    // the same strut should be fully consumed by the passage (no survivor).
+    const spec = { id: 'D1', azimuthDeg: 0, width: 24, height: 36 }
+    const cut = cutDoorways(model, [spec], R, { minStubLength: 0.5 })
+    expect(cut.doors[0].fits).toBe(true)
+    expect(cut.removedEdges.size).toBe(1)
+    expect(cut.trimmed).toHaveLength(0)
   })
 })

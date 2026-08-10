@@ -1,6 +1,7 @@
 import type { DomeModel, Vec3 } from './types'
 import {
   archTooFlat,
+  bottomEdgeIndex,
   effectiveHeight,
   offsetConvexOutward,
   openingArea,
@@ -230,11 +231,20 @@ interface DoorFrame {
 }
 
 /** Convex polygon half-planes for the door's cut envelope: the margined
- * opening outline, one plane per edge. Floor-standing doors (not a window)
- * skip the bottom edge's plane entirely — this reproduces the legacy
- * `zClipLow = -1e9` behavior so base-ring struts aren't borderline-excluded
- * by an edge that, for a door, isn't really a boundary (the portal continues
- * down through the riser/base, off the bottom of the shell). */
+ * opening outline, one plane per edge, with the bottom edge special-cased
+ * to match the two legacy rect rules exactly:
+ * - Floor-standing doors (not a window) skip the bottom edge's plane
+ *   entirely — this reproduces the legacy `zClipLow = -1e9` behavior so
+ *   base-ring struts aren't borderline-excluded by an edge that, for a
+ *   door, isn't really a boundary (the portal continues down through the
+ *   riser/base, off the bottom of the shell).
+ * - Windows never cut below `zLowRel = max(0, buckBottomRel − margin)`,
+ *   even though the offset polygon's own bottom edge sinks to
+ *   `buckBottomRel − margin` unclamped when margin exceeds buckBottomRel
+ *   (e.g. a floor-adjacent window with a wide margin and no riser). The
+ *   bottom edge's plane is overridden with that clamped horizontal bound
+ *   instead of the raw offset geometry — matching the legacy behavior of
+ *   `zClipLow` being a plain height clip, independent of shape. */
 function buildEnvelopePlanes(
   shape: OpeningShapeKind,
   width: number,
@@ -242,6 +252,7 @@ function buildEnvelopePlanes(
   buckBottomRel: number,
   margin: number,
   isWindow: boolean,
+  zLowRel: number,
 ): EnvelopePlane[] {
   const poly = offsetConvexOutward(
     openingOutline(shape, width, effH, buckBottomRel),
@@ -249,28 +260,24 @@ function buildEnvelopePlanes(
     isWindow ? margin : 0,
   )
   const n = poly.length
-  const edges = poly.map((a, i) => {
+  const bottomIdx = bottomEdgeIndex(poly)
+  const planes: EnvelopePlane[] = []
+  for (let i = 0; i < n; i++) {
+    if (i === bottomIdx) {
+      if (!isWindow) continue
+      planes.push({ nt: 0, nz: -1, c: -zLowRel })
+      continue
+    }
+    const a = poly[i]
     const b = poly[(i + 1) % n]
     const dx = b[0] - a[0]
     const dy = b[1] - a[1]
     const len = Math.hypot(dx, dy) || 1
-    return { nt: dy / len, nz: -dx / len, a, midH: (a[1] + b[1]) / 2 }
-  })
-  // Same bottom-edge detection as offsetConvexOutward's bottomIdx: the
-  // edge with an (almost) straight-down normal, breaking ties by height.
-  let bottomIdx = -1
-  let bottomH = Infinity
-  if (!isWindow) {
-    edges.forEach((e, i) => {
-      if (e.nz < -0.99 && e.midH < bottomH) {
-        bottomH = e.midH
-        bottomIdx = i
-      }
-    })
+    const nt = dy / len
+    const nz = -dx / len
+    planes.push({ nt, nz, c: nt * a[0] + nz * a[1] })
   }
-  return edges
-    .filter((_, i) => i !== bottomIdx)
-    .map((e) => ({ nt: e.nt, nz: e.nz, c: e.nt * e.a[0] + e.nz * e.a[1] }))
+  return planes
 }
 
 /** Interval [s0, s1] of a segment inside the door passage, or null. The
@@ -801,7 +808,7 @@ export function cutDoorways(
         ux,
         uy,
         z0,
-        planes: buildEnvelopePlanes(shape, spec.width, effH, buckBottomRel, margin, isWindow),
+        planes: buildEnvelopePlanes(shape, spec.width, effH, buckBottomRel, margin, isWindow, zLowRel),
         cutPlaneDist: fits ? Math.min(framePlaneDist, Math.sqrt(fitSq)) : framePlaneDist,
       })
     }

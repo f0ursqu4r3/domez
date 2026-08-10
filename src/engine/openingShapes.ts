@@ -101,13 +101,13 @@ export function openingOutline(
   }
 }
 
-/** Offset each edge outward by `margin` (bottom-most horizontal edge by
- * `bottomMargin` instead), re-intersect neighbors. margin 0 → identity. */
-export function offsetConvexOutward(
-  poly: [number, number][], margin: number, bottomMargin: number,
-): [number, number][] {
+/** Index of the polygon's bottom edge: the edge with an (almost)
+ * straight-down outward normal (ny < -0.99), ties broken by the lowest
+ * edge-midpoint height. -1 if no edge qualifies. Shared by
+ * `offsetConvexOutward` (bottom-edge margin override) and doorway.ts's
+ * envelope-plane builder (bottom-edge skip/clamp) so the two stay in sync. */
+export function bottomEdgeIndex(poly: [number, number][]): number {
   const n = poly.length
-  const normals: [number, number][] = []
   let bottomIdx = -1
   let bottomH = Infinity
   for (let i = 0; i < n; i++) {
@@ -116,9 +116,7 @@ export function offsetConvexOutward(
     const dx = b[0] - a[0]
     const dy = b[1] - a[1]
     const len = Math.hypot(dx, dy) || 1
-    const nx = dy / len
     const ny = -dx / len
-    normals.push([nx, ny])
     if (ny < -0.99) {
       const midH = (a[1] + b[1]) / 2
       if (midH < bottomH) {
@@ -127,6 +125,25 @@ export function offsetConvexOutward(
       }
     }
   }
+  return bottomIdx
+}
+
+/** Offset each edge outward by `margin` (bottom-most horizontal edge by
+ * `bottomMargin` instead), re-intersect neighbors. margin 0 → identity. */
+export function offsetConvexOutward(
+  poly: [number, number][], margin: number, bottomMargin: number,
+): [number, number][] {
+  const n = poly.length
+  const normals: [number, number][] = []
+  for (let i = 0; i < n; i++) {
+    const a = poly[i]
+    const b = poly[(i + 1) % n]
+    const dx = b[0] - a[0]
+    const dy = b[1] - a[1]
+    const len = Math.hypot(dx, dy) || 1
+    normals.push([dy / len, -dx / len])
+  }
+  const bottomIdx = bottomEdgeIndex(poly)
   // Offset line i: n_i·X = n_i·P_i + m_i.
   const lineC: number[] = []
   for (let i = 0; i < n; i++) {

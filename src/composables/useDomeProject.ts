@@ -42,6 +42,7 @@ import { domeObj } from '@/engine/exports/obj'
 import { fabricationSvg, hubLabelsSvg } from '@/engine/exports/svg'
 import { fabricationDxf } from '@/engine/exports/dxf'
 import { projectJson, parseProjectJson } from '@/engine/exports/json'
+import { encodeShare, decodeShare } from '@/lib/share'
 
 export type ViewMode = 'assembly' | 'frame' | 'surface' | 'exploded' | 'loads'
 export type Selection = { kind: 'strut'; edgeId: number } | { kind: 'hub'; vertexId: number } | null
@@ -1083,6 +1084,24 @@ function loadProjectFile(text: string): boolean {
   return true
 }
 
+/** Full share URL — the hash encodes the whole ProjectSettings. */
+async function shareLink(): Promise<string> {
+  return `${location.origin}${location.pathname}#${await encodeShare(projectSettings.value)}`
+}
+
+/** Copy the share URL; prompt() fallback when the clipboard is denied.
+ * Returns true when the clipboard write succeeded. */
+async function copyShareLink(): Promise<boolean> {
+  const url = await shareLink()
+  try {
+    await navigator.clipboard.writeText(url)
+    return true
+  } catch {
+    window.prompt('Copy share link:', url)
+    return false
+  }
+}
+
 // ---- Persistence: the project survives page refreshes ----------------------
 
 const STORAGE_KEY = 'domez-project-v1'
@@ -1253,7 +1272,24 @@ function restorePersisted() {
   }
 }
 
+const hadStoredProject =
+  typeof localStorage !== 'undefined' && localStorage.getItem(STORAGE_KEY) !== null
+
 restorePersisted()
+
+// Shared-project links: #p1:<payload> applies the encoded settings —
+// instantly for fresh visitors, behind a confirm for returning users.
+if (typeof window !== 'undefined' && window.location.hash.length > 1) {
+  void decodeShare(window.location.hash.slice(1)).then((settings) => {
+    if (settings) {
+      const apply =
+        !hadStoredProject ||
+        window.confirm('Load shared project? Your current project will be replaced.')
+      if (apply) loadProjectFile(JSON.stringify({ app: 'domez', settings }))
+    }
+    window.history.replaceState(null, '', window.location.pathname + window.location.search)
+  })
+}
 
 /** Wipe the saved session and return every setting to factory defaults.
  * Field order mirrors restorePersisted (sync watchers fire on units,
@@ -1363,6 +1399,8 @@ export function useDomeProject() {
     resetProject,
     exporters,
     loadProjectFile,
+    shareLink,
+    copyShareLink,
     titleOf,
   }
 }

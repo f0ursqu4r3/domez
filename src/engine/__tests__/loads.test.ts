@@ -3,6 +3,7 @@ import { analyzeLoads, compressionCapacityN, sectionArea, sectionImin, solveTrus
 import { generateDome } from '../dome'
 import { generateZome } from '../zome'
 import { generateGoldberg } from '../goldberg'
+import { loadsCsv } from '../exports/csv'
 
 describe('section properties', () => {
   it('computes rect and tube properties in SI', () => {
@@ -183,5 +184,19 @@ describe('analyzeLoads on a geodesic dome', () => {
       ok: false,
       reason: 'unsupported-family',
     })
+  })
+})
+
+describe('loads CSV', () => {
+  it('emits one row per edge with imperial forces in lbf', () => {
+    const model = generateDome({ frequency: 3, fraction: '1/2', baseMode: 'leveled' })
+    const res = analyzeLoads(model, 156, 'imperial', SECT, FIR, INPUTS)
+    expect(res.ok).toBe(true)
+    if (!res.ok) return
+    const csv = loadsCsv(model, res, 156, 'imperial')
+    const rows = csv.trim().split('\n')
+    expect(rows.length).toBe(1 + model.edges.length)
+    expect(rows[0]).toContain('lbf')
+    expect(rows[1].split(',').length).toBe(7)
   })
 })

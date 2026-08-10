@@ -40,6 +40,8 @@ export interface ProjectSettings {
   /** Price-book overrides by key (sparse) and currency symbol. */
   prices?: Record<string, number>
   currency?: string
+  /** Structural load-case inputs for the loads analysis, SI throughout. */
+  loadInputs?: { snowKPa: number; windKPa: number; skinKgM2: number }
 }
 
 /** Round-trippable project file: settings drive the app; derived data is

@@ -24,7 +24,17 @@ import { generateZome } from '@/engine/zome'
 import { generateGoldberg } from '@/engine/goldberg'
 import { diameterToWorking, IMPERIAL_INCREMENTS, METRIC_INCREMENTS } from '@/engine/units'
 import type { Fraction, Frequency, UnitSystem } from '@/engine/types'
-import { cutListCsv, hubsCsv, boardsCsv, openingsCsv, panelsCsv, miterCsv, costsCsv } from '@/engine/exports/csv'
+import {
+  cutListCsv,
+  hubsCsv,
+  boardsCsv,
+  openingsCsv,
+  panelsCsv,
+  miterCsv,
+  costsCsv,
+  loadsCsv as loadsCsvText,
+} from '@/engine/exports/csv'
+import { analyzeLoads, type StructureProps } from '@/engine/loads'
 import { cutTemplatesSvg, boardDiagramsSvg } from '@/engine/exports/templates'
 import { assemblyGuideSvg } from '@/engine/exports/guide'
 import { panelPatternsSvg } from '@/engine/exports/patterns'
@@ -33,7 +43,7 @@ import { fabricationSvg, hubLabelsSvg } from '@/engine/exports/svg'
 import { fabricationDxf } from '@/engine/exports/dxf'
 import { projectJson, parseProjectJson } from '@/engine/exports/json'
 
-export type ViewMode = 'assembly' | 'frame' | 'surface' | 'exploded'
+export type ViewMode = 'assembly' | 'frame' | 'surface' | 'exploded' | 'loads'
 export type Selection = { kind: 'strut'; edgeId: number } | { kind: 'hub'; vertexId: number } | null
 
 /** Real cross-section of the strut stock, canonical mm. */
@@ -45,6 +55,7 @@ export interface MaterialDef {
   label: string
   profile: string
   section: StrutSection
+  structure: StructureProps
   stock: { imperial: StockLength[]; metric: StockLength[] }
   defaultJoint: JointMethodId
 }
@@ -55,6 +66,7 @@ export const MATERIALS: MaterialDef[] = [
     label: 'Douglas Fir 2×4',
     profile: '1.5″ × 3.5″ (38 × 89 mm)',
     section: { kind: 'rect', widthMm: 38, depthMm: 89 },
+    structure: { eMPa: 11000, densityKgM3: 500, sigmaTMPa: 5, sigmaCMPa: 7 },
     stock: {
       imperial: [
         { length: 96, label: '8 ft' },
@@ -76,6 +88,7 @@ export const MATERIALS: MaterialDef[] = [
     label: 'Lumber 2×2',
     profile: '1.5″ × 1.5″ (38 × 38 mm)',
     section: { kind: 'rect', widthMm: 38, depthMm: 38 },
+    structure: { eMPa: 11000, densityKgM3: 500, sigmaTMPa: 5, sigmaCMPa: 7 },
     stock: {
       imperial: [
         { length: 96, label: '8 ft' },
@@ -95,6 +108,7 @@ export const MATERIALS: MaterialDef[] = [
     label: 'EMT conduit ¾″',
     profile: '0.75″ trade size steel tube',
     section: { kind: 'round', odMm: 23.4 },
+    structure: { eMPa: 200000, densityKgM3: 7850, sigmaTMPa: 150, sigmaCMPa: 150, wallMm: 1.07 },
     stock: {
       imperial: [{ length: 120, label: '10 ft' }],
       metric: [{ length: 3000, label: '3.0 m' }],
@@ -106,6 +120,7 @@ export const MATERIALS: MaterialDef[] = [
     label: 'PVC pipe 1″',
     profile: 'Schedule 40',
     section: { kind: 'round', odMm: 33.4 },
+    structure: { eMPa: 2800, densityKgM3: 1400, sigmaTMPa: 10, sigmaCMPa: 10, wallMm: 3.38 },
     stock: {
       imperial: [
         { length: 120, label: '10 ft' },
@@ -123,6 +138,7 @@ export const MATERIALS: MaterialDef[] = [
     label: 'Steel tube 1″',
     profile: '1″ square or round, 16 ga',
     section: { kind: 'round', odMm: 25.4 },
+    structure: { eMPa: 200000, densityKgM3: 7850, sigmaTMPa: 150, sigmaCMPa: 150, wallMm: 1.5 },
     stock: {
       imperial: [
         { length: 240, label: '20 ft' },
@@ -215,6 +231,12 @@ interface ProjectState {
     result: OptimizeResult | null
     running: boolean
   }
+  /** Structural load-case inputs for the loads analysis, SI throughout. */
+  loadInputs: {
+    snowKPa: number
+    windKPa: number
+    skinKgM2: number
+  }
 }
 
 const state = reactive<ProjectState>({
@@ -250,6 +272,7 @@ const state = reactive<ProjectState>({
   selection: null,
   viewResetToken: 0,
   optimizer: { min: 20, max: 30, result: null, running: false },
+  loadInputs: { snowKPa: 0.96, windKPa: 0.96, skinKgM2: 8.5 },
 })
 
 const round3 = (v: number) => Math.round(v * 1000) / 1000
@@ -408,6 +431,15 @@ const strutSectionWorking = computed(() => {
     ? { kind: 'rect' as const, width: c(s.widthMm), depth: c(s.depthMm) }
     : { kind: 'round' as const, diameter: c(s.odMm) }
 })
+
+/** Dead + snow + wind envelope for the current dome, material, and load
+ * inputs. Panels mounted on both faces double the skin dead load. */
+const loadsResult = computed(() =>
+  analyzeLoads(model.value, radius.value, state.units, material.value.section, material.value.structure, {
+    ...state.loadInputs,
+    skinFactor: state.panelPlacement === 'both' ? 2 : 1,
+  }),
+)
 
 const availableStock = computed(() => material.value.stock[state.units])
 const activeStock = computed(() =>
@@ -805,6 +837,7 @@ const projectSettings = computed(() => ({
   zomeRows: state.zomeRows,
   prices: { ...state.prices },
   currency: state.currency,
+  loadInputs: { ...state.loadInputs },
 }))
 
 const exporters = {
@@ -846,6 +879,15 @@ const exporters = {
       costsCsv(costEstimate.value, state.currency),
       'text/csv',
     ),
+  loadsCsv: () => {
+    const r = loadsResult.value
+    if (!r.ok) return
+    download(
+      `${fileStem.value}-loads.csv`,
+      loadsCsvText(model.value, r, radius.value, state.units),
+      'text/csv',
+    )
+  },
   assemblyGuide: () =>
     download(
       `${fileStem.value}-assembly-guide.svg`,
@@ -971,6 +1013,14 @@ function loadProjectFile(text: string): boolean {
     typeof settings.currency === 'string' && settings.currency.length > 0
       ? settings.currency.slice(0, 3)
       : '$'
+  const li = settings.loadInputs as Record<string, unknown> | undefined
+  if (li && typeof li === 'object') {
+    const num = (v: unknown, ok: (n: number) => boolean) =>
+      typeof v === 'number' && Number.isFinite(v) && ok(v) ? v : undefined
+    state.loadInputs.snowKPa = num(li.snowKPa, (n) => n >= 0) ?? state.loadInputs.snowKPa
+    state.loadInputs.windKPa = num(li.windKPa, (n) => n >= 0) ?? state.loadInputs.windKPa
+    state.loadInputs.skinKgM2 = num(li.skinKgM2, (n) => n >= 0) ?? state.loadInputs.skinKgM2
+  }
   // Restore openings after the sync model watcher has cleared them,
   // dropping any face ids or types that don't fit the loaded model.
   const openings: OpeningAssignments = {}
@@ -1068,6 +1118,7 @@ function persistedSlice() {
     panelPlacement: state.panelPlacement,
     optimizerMin: state.optimizer.min,
     optimizerMax: state.optimizer.max,
+    loadInputs: { ...state.loadInputs },
   }
 }
 
@@ -1103,7 +1154,7 @@ function restorePersisted() {
         Object.entries(p.disabledStock as Record<string, unknown>).map(([k, v]) => [k, !!v]),
       )
     }
-    if (['assembly', 'frame', 'surface', 'exploded'].includes(p.viewMode as string)) {
+    if (['assembly', 'frame', 'surface', 'exploded', 'loads'].includes(p.viewMode as string)) {
       state.viewMode = p.viewMode as ViewMode
     }
     state.explode = num(p.explode, (n) => n >= 0 && n <= 1) ?? state.explode
@@ -1131,6 +1182,12 @@ function restorePersisted() {
     }
     state.optimizer.min = num(p.optimizerMin, (n) => n > 0) ?? state.optimizer.min
     state.optimizer.max = num(p.optimizerMax, (n) => n > 0) ?? state.optimizer.max
+    const li = p.loadInputs as Record<string, unknown> | undefined
+    if (li && typeof li === 'object') {
+      state.loadInputs.snowKPa = num(li.snowKPa, (n) => n >= 0) ?? state.loadInputs.snowKPa
+      state.loadInputs.windKPa = num(li.windKPa, (n) => n >= 0) ?? state.loadInputs.windKPa
+      state.loadInputs.skinKgM2 = num(li.skinKgM2, (n) => n >= 0) ?? state.loadInputs.skinKgM2
+    }
     state.doors = Array.isArray(p.doors)
       ? (p.doors as Record<string, unknown>[])
           .filter(
@@ -1240,6 +1297,9 @@ function resetProject() {
   state.optimizer.min = 20
   state.optimizer.max = 30
   state.optimizer.result = null
+  state.loadInputs.snowKPa = 0.96
+  state.loadInputs.windKPa = 0.96
+  state.loadInputs.skinKgM2 = 8.5
   state.viewResetToken++
 }
 
@@ -1277,6 +1337,7 @@ export function useDomeProject() {
     workingRiserHeight,
     bom,
     costEstimate,
+    loadsResult,
     setPrice,
     resetPrices,
     openingGroups,

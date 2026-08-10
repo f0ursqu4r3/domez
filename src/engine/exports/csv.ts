@@ -7,6 +7,7 @@ import type { DomeModel, UnitSystem } from '../types'
 import { formatLength } from '../units'
 import { miterCuts } from '../miter'
 import type { CostEstimate } from '../bom'
+import type { LoadsResult } from '../loads'
 
 const esc = (s: string | number) => {
   const str = String(s)
@@ -208,6 +209,34 @@ export function costsCsv(est: CostEstimate, currency: string): string {
   lines.push('')
   lines.push(row(`Total (${currency})`, est.total.toFixed(2)))
   lines.push(row('Unpriced lines', est.unpricedCount))
+  return lines.join('\n')
+}
+
+/** Per-member loads: force, sense, utilization, governing case. */
+export function loadsCsv(
+  model: DomeModel,
+  result: LoadsResult,
+  radiusWorking: number,
+  units: UnitSystem,
+): string {
+  if (!result.ok) return ''
+  const toForce = units === 'imperial' ? 0.224809 : 1
+  const fUnit = units === 'imperial' ? 'lbf' : 'N'
+  const lines = [row('edge', 'type', 'length', `force_${fUnit}`, 'sense', 'utilization_pct', 'case')]
+  for (const m of result.members) {
+    const e = model.edges[m.edgeId]
+    lines.push(
+      row(
+        m.edgeId,
+        model.strutTypes[e.typeId].label,
+        formatLength(e.chordFactor * radiusWorking, units),
+        (Math.abs(m.forceN) * toForce).toFixed(1),
+        m.forceN >= 0 ? 'T' : 'C',
+        (m.utilization * 100).toFixed(1),
+        m.caseLabel,
+      ),
+    )
+  }
   return lines.join('\n')
 }
 

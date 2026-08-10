@@ -168,4 +168,23 @@ describe('panel frames', () => {
     // ignores endOffset — the two runs must diverge measurably.
     expect(framedResult.best!.boardsNeeded).not.toBe(strutResult.best!.boardsNeeded)
   })
+
+  it('optimizeDiameter with doors + framed-panel scores per-candidate doorway topology', () => {
+    const m = generateDome({ frequency: 3, fraction: '1/2', baseMode: 'leveled' })
+    const result = optimizeDiameter(m, {
+      minDiameter: 300,
+      maxDiameter: 312,
+      step: 12,
+      increment: 1 / 8,
+      endOffset: 2,
+      kerf: 1 / 8,
+      stock: [{ length: 144, label: '12 ft' }],
+      units: 'imperial',
+      jointId: 'framed-panel',
+      doors: [{ id: 'D1', azimuthDeg: 0, width: 48, height: 90 }],
+      minStubLength: 6,
+    })
+    expect(result.best).not.toBeNull()
+    expect(Number.isFinite(result.best!.boardsNeeded)).toBe(true)
+  })
 })

@@ -1,6 +1,6 @@
 import type { DomeModel, UnitSystem } from './types'
 import { buildCutList, type JointMethodId } from './cutlist'
-import { cutDoorways, emptyDoorwayCut, type DoorSpec, type DoorwayCut } from './doorway'
+import { cutDoorways, emptyDoorwayCut, type DoorSpec } from './doorway'
 import { buildRiser } from './riser'
 import { buildPanelFrames } from './panelFrames'
 import { packCuts, type StockLength } from './packing'
@@ -34,10 +34,6 @@ export interface OptimizeOptions {
   /** Active joint method — when 'framed-panel', each candidate is scored on
    * its frame member takeoff instead of plain strut rows. */
   jointId?: JointMethodId
-  /** Fixed doorway cut (topology only — its removed/trimmed edge and face
-   * ids don't depend on radius) used to omit panels when scoring
-   * 'framed-panel' candidates. */
-  doorway?: DoorwayCut
 }
 
 export interface OptimizeCandidate {
@@ -91,9 +87,12 @@ export function optimizeDiameter(model: DomeModel, opts: OptimizeOptions): Optim
           })
         : undefined
     const candidateRadius = diameter / 2
+    // Doorway topology (removed/trimmed edges) DOES vary with radius — reuse
+    // this candidate's own doorway cut (already recomputed above from the
+    // door specs), not a fixed snapshot from another radius.
     const framePlan =
       opts.jointId === 'framed-panel'
-        ? buildPanelFrames(model, candidateRadius, opts.units, opts.doorway ?? emptyDoorwayCut())
+        ? buildPanelFrames(model, candidateRadius, opts.units, doorway ?? emptyDoorwayCut())
         : null
     const cutList = buildCutList(
       model,

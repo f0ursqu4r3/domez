@@ -9,6 +9,7 @@ import { packCuts } from '../packing'
 import { buildBom } from '../bom'
 import { planPanels } from '../panels'
 import { framesCsv } from '../exports/csv'
+import { frameJigsSvg } from '../exports/frames'
 import { optimizeDiameter } from '../optimize'
 
 // Match the exact generator/param call shapes used in engine.test.ts, and
@@ -167,6 +168,17 @@ describe('panel frames', () => {
     // Interior members double vs. one strut per edge, and framed-panel
     // ignores endOffset — the two runs must diverge measurably.
     expect(framedResult.best!.boardsNeeded).not.toBe(strutResult.best!.boardsNeeded)
+  })
+
+  it('frameJigsSvg draws one page per frame type, each with bevel annotations and sill notes', () => {
+    const m = generateDome({ frequency: 3, fraction: '1/2', baseMode: 'leveled' })
+    const plan = buildPanelFrames(m, 156, 'imperial', NO_DOOR)
+    const svg = frameJigsSvg(plan, 'imperial', 'DOMEZ test')
+    const pageMatches = svg.match(/data-frame-page="/g) ?? []
+    expect(pageMatches.length).toBe(plan.types.length)
+    const bevelMatches = svg.match(/data-bevel="/g) ?? []
+    expect(bevelMatches.length).toBeGreaterThanOrEqual(plan.types.length)
+    expect(svg).toContain('sill')
   })
 
   it('optimizeDiameter with doors + framed-panel scores per-candidate doorway topology', () => {

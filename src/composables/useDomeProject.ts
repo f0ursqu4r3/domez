@@ -40,6 +40,7 @@ import { analyzeLoads, type StructureProps } from '@/engine/loads'
 import { cutTemplatesSvg, boardDiagramsSvg } from '@/engine/exports/templates'
 import { assemblyGuideSvg } from '@/engine/exports/guide'
 import { panelPatternsSvg } from '@/engine/exports/patterns'
+import { frameJigsSvg } from '@/engine/exports/frames'
 import { domeObj } from '@/engine/exports/obj'
 import { fabricationSvg, hubLabelsSvg } from '@/engine/exports/svg'
 import { fabricationDxf } from '@/engine/exports/dxf'
@@ -872,6 +873,15 @@ const exporters = {
     const plan = framePlan.value
     if (!plan) return
     download(`${fileStem.value}-frames.csv`, framesCsvText(plan, state.units), 'text/csv')
+  },
+  frameJigs: () => {
+    const plan = framePlan.value
+    if (!plan) return
+    download(
+      `${fileStem.value}-panel-jigs.svg`,
+      frameJigsSvg(plan, state.units, titleOf()),
+      'image/svg+xml',
+    )
   },
   miterCsv: () =>
     download(

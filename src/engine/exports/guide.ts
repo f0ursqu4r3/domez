@@ -9,6 +9,7 @@ export interface GuideOptions {
   units: UnitSystem
   radius: number
   title: string
+  framedPanel?: boolean
 }
 
 /**
@@ -83,6 +84,11 @@ export function assemblyGuideSvg(
     '1. Raise each course bottom-up: stand the risers from the ring below, then close the ring.',
     '2. Print hub labels (Assembly tab) and tape each pattern to its plate before build day.',
     '3. Trimmed (†) door/window pieces install with their bucks — see the cut list and openings.',
+    ...(opts.framedPanel
+      ? [
+          'Framed-panel build: place whole panels in the same course order — seams bolt to the previous course.',
+        ]
+      : []),
   ]) {
     text(m, cy, line, 's')
     cy += fs * 1.4

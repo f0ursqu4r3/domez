@@ -924,6 +924,7 @@ const exporters = {
         units: state.units,
         radius: radius.value,
         title: titleOf(),
+        framedPanel: state.jointId === 'framed-panel',
       }),
       'image/svg+xml',
     ),

@@ -19,7 +19,14 @@ function selectHub(hubTypeId: number) {
 </script>
 
 <template>
-  <div class="flex flex-col gap-3 p-4">
+  <div v-if="state.jointId === 'framed-panel'" class="flex flex-col gap-3 p-4">
+    <h3 class="section-title mb-0">Hub schedule</h3>
+    <p class="text-xs text-muted-foreground leading-relaxed">
+      No hubs — framed panels bolt edge-to-edge along their seams. See the Parts tab frame
+      schedule and the panel jig drawings.
+    </p>
+  </div>
+  <div v-else class="flex flex-col gap-3 p-4">
     <div class="flex items-baseline justify-between">
       <h3 class="section-title mb-0">Hub schedule</h3>
       <span class="text-xs text-muted-foreground font-mono">{{ model.vertices.length }} hubs</span>

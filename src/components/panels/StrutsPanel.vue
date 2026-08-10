@@ -12,7 +12,7 @@ import {
 } from '@/components/ui/table'
 import { Badge } from '@/components/ui/badge'
 
-const { state, cutList, model, endOffset } = useDomeProject()
+const { state, cutList, model, endOffset, framePlan } = useDomeProject()
 
 function selectType(typeId: number) {
   const first = model.value.strutTypes[typeId]?.edgeIds[0]
@@ -21,7 +21,61 @@ function selectType(typeId: number) {
 </script>
 
 <template>
-  <div class="flex flex-col gap-3 p-4">
+  <div v-if="state.jointId === 'framed-panel' && framePlan" class="flex flex-col gap-3 p-4">
+    <div class="flex items-baseline justify-between">
+      <h3 class="section-title mb-0">Frame schedule</h3>
+      <span class="text-xs text-muted-foreground font-mono">
+        {{ framePlan.totalPanels }} panels · {{ framePlan.seamCount }} seams ·
+        {{ framePlan.boltCount }} bolts
+      </span>
+    </div>
+    <div
+      v-for="t in framePlan.types"
+      :key="t.label"
+      class="rounded-md border border-border bg-card p-3 flex flex-col gap-2"
+    >
+      <div class="flex items-baseline justify-between">
+        <span class="font-mono font-semibold text-sm">{{ t.label }}</span>
+        <span class="text-xs text-muted-foreground">build {{ t.panelCount }} · {{ t.sides }} sides</span>
+      </div>
+      <div class="overflow-x-auto rounded-md border border-border">
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>Member</TableHead>
+              <TableHead class="text-right">Qty</TableHead>
+              <TableHead class="text-right">Length</TableHead>
+              <TableHead class="text-right">Miter</TableHead>
+              <TableHead class="text-right">Bevel</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            <TableRow v-for="(m, mi) in t.members" :key="mi">
+              <TableCell class="font-mono">
+                {{ m.label }}
+                <Badge v-if="m.boundary" variant="secondary" class="ml-1">sill</Badge>
+              </TableCell>
+              <TableCell class="text-right font-mono">{{ m.count * t.panelCount }}</TableCell>
+              <TableCell class="text-right font-mono">{{
+                formatLength(m.longPointLength, state.units)
+              }}</TableCell>
+              <TableCell class="text-right font-mono text-muted-foreground"
+                >{{ m.miterStartDeg.toFixed(1) }}°/{{ m.miterEndDeg.toFixed(1) }}° miter</TableCell
+              >
+              <TableCell class="text-right font-mono text-muted-foreground"
+                >{{ m.bevelDeg.toFixed(1) }}° bevel</TableCell
+              >
+            </TableRow>
+          </TableBody>
+        </Table>
+      </div>
+    </div>
+    <p class="text-xs text-muted-foreground leading-relaxed">
+      Openings omit their panels — frame those on site. Members are long-point lengths; cut back
+      at the miter.
+    </p>
+  </div>
+  <div v-else class="flex flex-col gap-3 p-4">
     <div class="flex items-baseline justify-between">
       <h3 class="section-title mb-0">Cut list</h3>
       <span class="text-xs text-muted-foreground font-mono">

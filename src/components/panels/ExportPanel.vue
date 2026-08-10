@@ -44,12 +44,16 @@ const groups = computed(() => [
         icon: ClipboardList,
         run: exporters.boardsCsv,
       },
-      {
-        label: 'Cut templates SVG',
-        desc: '1:1 tape-on end templates',
-        icon: PencilRuler,
-        run: exporters.cutTemplates,
-      },
+      ...(state.jointId === 'framed-panel'
+        ? []
+        : [
+            {
+              label: 'Cut templates SVG',
+              desc: '1:1 tape-on end templates',
+              icon: PencilRuler,
+              run: exporters.cutTemplates,
+            },
+          ]),
       {
         label: 'Board diagrams SVG',
         desc: 'visual cutting plan',
@@ -87,12 +91,16 @@ const groups = computed(() => [
         icon: PencilRuler,
         run: exporters.svg,
       },
-      {
-        label: 'Hub labels SVG',
-        desc: 'printable hub stickers',
-        icon: Tag,
-        run: exporters.labelsSvg,
-      },
+      ...(state.jointId === 'framed-panel'
+        ? []
+        : [
+            {
+              label: 'Hub labels SVG',
+              desc: 'printable hub stickers',
+              icon: Tag,
+              run: exporters.labelsSvg,
+            },
+          ]),
       ...(state.jointId === 'mitered'
         ? [
             {
@@ -100,6 +108,22 @@ const groups = computed(() => [
               desc: 'per-end compound angles',
               icon: FileSpreadsheet,
               run: exporters.miterCsv,
+            },
+          ]
+        : []),
+      ...(state.jointId === 'framed-panel'
+        ? [
+            {
+              label: 'Panel jig drawings SVG',
+              desc: 'per-type jig recipes',
+              icon: PencilRuler,
+              run: exporters.frameJigs,
+            },
+            {
+              label: 'Frames CSV',
+              desc: 'members, miters, bevels',
+              icon: FileSpreadsheet,
+              run: exporters.framesCsv,
             },
           ]
         : []),

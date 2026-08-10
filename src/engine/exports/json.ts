@@ -17,7 +17,14 @@ export interface ProjectSettings {
   /** Panel opening assignments: faceId -> window | door | vent. */
   openings?: Record<string, string>
   /** Parametric doorways, canonical mm. depthMm is signed recess. */
-  doors?: { azimuthDeg: number; widthMm: number; heightMm: number; depthMm?: number; marginMm?: number }[]
+  doors?: {
+    azimuthDeg: number
+    widthMm: number
+    heightMm: number
+    depthMm?: number
+    marginMm?: number
+    shape?: string
+  }[]
   /** Parametric framed windows, canonical mm. */
   windows?: {
     azimuthDeg: number
@@ -26,6 +33,7 @@ export interface ProjectSettings {
     heightMm: number
     depthMm?: number
     marginMm?: number
+    shape?: string
   }[]
   /** Skin panel mounting: outside | inside | both. */
   panelPlacement?: string

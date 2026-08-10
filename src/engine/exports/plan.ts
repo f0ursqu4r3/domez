@@ -293,8 +293,9 @@ export function planSvg(model: DomeModel, doorway: DoorwayCut, opts: PlanOptions
     push(`<g data-window-tick="${esc(w.id)}">`)
     push(`<path class="tick" d="M ${quad.map((p) => p.join(' ')).join(' L ')} Z"/>`)
     const [lx, ly] = toPage(...gapQuad(w.azimuthDeg, 0, r0 + overlap * 3, r0 + overlap * 3)[0])
+    const wtext = (w.shape === 'circle' ? '⌀' : '') + fmt(w.width)
     push(
-      `<text x="${lx.toFixed(3)}" y="${ly.toFixed(3)}" class="tick-lbl">${esc(fmt(w.width))} @ ${fmtAz(w.azimuthDeg)}° · sill ${esc(fmt(w.sillHeight ?? 0))}</text>`,
+      `<text x="${lx.toFixed(3)}" y="${ly.toFixed(3)}" class="tick-lbl">${esc(wtext)} @ ${fmtAz(w.azimuthDeg)}° · sill ${esc(fmt(w.sillHeight ?? 0))}</text>`,
     )
     push(`</g>`)
   }

@@ -197,53 +197,28 @@ export function buildCutList(
       : ''
 
     for (const door of doorway.doors) {
-      const jamb = roundToIncrement(door.jambLength, opts.increment)
-      const header = roundToIncrement(door.headerLength, opts.increment)
-      rows.push(
-        {
-          typeId: -1,
-          label: `${door.id} jamb`,
-          quantity: 2,
-          chordLength: door.jambLength,
-          exactCutLength: door.jambLength,
-          roundedCutLength: jamb,
-          roundingError: Math.abs(jamb - door.jambLength),
-          axialAngleDeg: 90,
-          dihedralMinDeg: NaN,
-          dihedralMaxDeg: NaN,
-          kind: 'frame',
-          note: `${door.id} buck vertical, square cuts${framedBuckNote}`,
-        },
-        {
-          typeId: -1,
-          label: `${door.id} header`,
-          quantity: 1,
-          chordLength: door.headerLength,
-          exactCutLength: door.headerLength,
-          roundedCutLength: header,
-          roundingError: Math.abs(header - door.headerLength),
-          axialAngleDeg: 90,
-          dihedralMinDeg: NaN,
-          dihedralMaxDeg: NaN,
-          kind: 'frame',
-          note: `${door.id} rough-opening span; add framing allowance for your style${framedBuckNote}`,
-        },
-      )
-      if ((door.sillHeight ?? 0) > 0) {
-        const sillCut = roundToIncrement(door.headerLength, opts.increment)
+      for (const m of door.buckMembers) {
+        const cut = roundToIncrement(m.length, opts.increment)
+        const mitered = Math.max(m.miterDegA, m.miterDegB) > 1e-9
         rows.push({
           typeId: -1,
-          label: `${door.id} sill`,
-          quantity: 1,
-          chordLength: door.headerLength,
-          exactCutLength: door.headerLength,
-          roundedCutLength: sillCut,
-          roundingError: Math.abs(sillCut - door.headerLength),
-          axialAngleDeg: 90,
+          label: `${door.id} ${m.part}`,
+          quantity: m.quantity,
+          chordLength: m.length,
+          exactCutLength: m.length,
+          roundedCutLength: cut,
+          roundingError: Math.abs(cut - m.length),
+          axialAngleDeg: mitered ? Math.max(m.miterDegA, m.miterDegB) : Number.NaN,
           dihedralMinDeg: NaN,
           dihedralMaxDeg: NaN,
           kind: 'frame',
-          note: `${door.id} window sill, slope for drainage on site${framedBuckNote}`,
+          note: mitered
+            ? `${door.id} faceted buck — miter ${m.miterDegA}°/${m.miterDegB}°${framedBuckNote}`
+            : m.part === 'sill'
+              ? `${door.id} window sill, slope for drainage on site${framedBuckNote}`
+              : m.part === 'header'
+                ? `${door.id} rough-opening span; add framing allowance for your style${framedBuckNote}`
+                : `${door.id} buck vertical, square cuts${framedBuckNote}`,
         })
       }
 
@@ -260,6 +235,7 @@ export function buildCutList(
         'wall plate': `${door.id} closure wall bottom plate, square cuts`,
         'wall stud': `${door.id} closure wall stud; ends land on plate and shell edge`,
         'top blocking': `${door.id} closure top blocking, buck to shell`,
+        'ring blocking': `${door.id} closure ring blocking, buck plane to shell`,
         'shell edge': `${door.id} closure rake along the shell facet — trimmed struts land here`,
         'top edge': `${door.id} closure roof edge along the shell facet`,
         'sill blocking': `${door.id} closure sill apron blocking, buck to shell`,

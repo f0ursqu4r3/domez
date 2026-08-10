@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import { generateDome } from '../dome'
 import { cutDoorways, optimizeDoorPlacement } from '../doorway'
+import { buildCutList } from '../cutlist'
+import { planSvg } from '../exports/plan'
 import type { DomeModel } from '../types'
 
 const R = 156
@@ -250,5 +252,26 @@ describe('shape-aware placement', () => {
     expect(fast.after.score).toBeLessThanOrEqual(fast.before.score + 1e-9)
     expect(Math.abs(fast.azimuthDeg * 4 - Math.round(fast.azimuthDeg * 4))).toBeLessThan(1e-9)
     expect(fast.reason.length).toBeGreaterThan(0)
+  })
+})
+
+describe('shaped exports', () => {
+  it('cut list carries 16 rim segments with 11.25° in the angle column', () => {
+    const circle = { id: 'W1', azimuthDeg: 15, width: 40, height: 40, sillHeight: 48, shape: 'circle' as const }
+    const cut = cutDoorways(dome, [circle], R, { minStubLength: 6 })
+    const list = buildCutList(
+      dome,
+      { radius: R, increment: 0.125, endOffset: 0, units: 'imperial' },
+      cut,
+    )
+    const rim = list.rows.find((r) => r.label === 'W1 rim segment')!
+    expect(rim.quantity).toBe(16)
+    expect(rim.axialAngleDeg).toBeCloseTo(11.25, 6)
+  })
+  it('floor plan labels a circle window with ⌀', () => {
+    const circle = { id: 'W1', azimuthDeg: 15, width: 40, height: 40, sillHeight: 48, shape: 'circle' as const }
+    const cut = cutDoorways(dome, [circle], R, { minStubLength: 6 })
+    const svg = planSvg(dome, cut, { units: 'imperial', radius: R, riserHeight: 0, wallThickness: 3.5, title: 't' })
+    expect(svg).toContain('⌀')
   })
 })

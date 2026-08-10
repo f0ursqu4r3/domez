@@ -200,7 +200,14 @@ interface ProjectState {
    * survive frequency/diameter changes — only their fit is revalidated.
    * depthMm is signed (negative pushes the buck toward the shell);
    * marginMm is the cut clearance band around the rough opening. */
-  doors: { azimuthDeg: number; widthMm: number; heightMm: number; depthMm: number; marginMm: number }[]
+  doors: {
+    azimuthDeg: number
+    widthMm: number
+    heightMm: number
+    depthMm: number
+    marginMm: number
+    shape: 'rect' | 'arch'
+  }[]
   /** Parametric framed windows: doors with a sill height. Canonical mm. */
   framedWindows: {
     azimuthDeg: number
@@ -209,6 +216,7 @@ interface ProjectState {
     heightMm: number
     depthMm: number
     marginMm: number
+    shape: 'rect' | 'arch' | 'circle' | 'triangle'
   }[]
   /** Render the extruded-entry closure sealing the shell back to each buck. */
   closeDoorways: boolean
@@ -488,6 +496,7 @@ const doorSpecs = computed<DoorSpec[]>(() => {
     height: c(d.heightMm),
     extraDepth: c(d.depthMm),
     margin: c(d.marginMm),
+    shape: d.shape,
   }))
 })
 
@@ -498,10 +507,11 @@ const windowSpecs = computed<DoorSpec[]>(() => {
     id: `W${i + 1}`,
     azimuthDeg: w.azimuthDeg,
     width: c(w.widthMm),
-    height: c(w.heightMm),
+    height: c(w.shape === 'circle' ? w.widthMm : w.heightMm),
     sillHeight: c(w.sillMm),
     extraDepth: c(w.depthMm),
     margin: c(w.marginMm),
+    shape: w.shape,
   }))
 })
 
@@ -668,6 +678,7 @@ function addDoorAt(azimuthDeg: number) {
     heightMm: 80 * MM_PER_INCH,
     depthMm: 0,
     marginMm: 0,
+    shape: 'rect',
   })
   state.openingTool = 'off'
 }
@@ -688,6 +699,7 @@ function addWindowAt(azimuthDeg: number, clickHeightMm: number) {
     heightMm,
     depthMm: 0,
     marginMm: 0,
+    shape: 'rect',
   })
   state.openingTool = 'off'
 }
@@ -713,12 +725,15 @@ function optimizeDoorPosition(index: number): DoorPlacementResult | null {
 function optimizeWindowPosition(index: number): DoorPlacementResult | null {
   const spec = windowSpecs.value[index]
   if (!spec) return null
+  const toMm = (v: number) => (state.units === 'imperial' ? v * MM_PER_INCH : v)
   const result = optimizeDoorPlacement(model.value, spec, radius.value, {
     minStubLength: minStubLength.value,
     increment: state.increment,
     otherDoors: portalSpecs.value.filter((s) => s.id !== spec.id),
+    sillSearchHalfWidth: state.units === 'imperial' ? 12 : 300,
   })
   state.framedWindows[index].azimuthDeg = result.azimuthDeg
+  if (typeof result.sillHeight === 'number') state.framedWindows[index].sillMm = toMm(result.sillHeight)
   return result
 }
 
@@ -1121,6 +1136,7 @@ function loadProjectFile(text: string): boolean {
       heightMm: d.heightMm,
       depthMm: typeof d.depthMm === 'number' ? d.depthMm : 0,
       marginMm: typeof d.marginMm === 'number' && d.marginMm > 0 ? d.marginMm : 0,
+      shape: d.shape === 'arch' ? 'arch' : 'rect',
     }))
   state.framedWindows = (Array.isArray(settings.windows) ? settings.windows : [])
     .filter(
@@ -1140,6 +1156,8 @@ function loadProjectFile(text: string): boolean {
       heightMm: w.heightMm,
       depthMm: typeof w.depthMm === 'number' ? w.depthMm : 0,
       marginMm: typeof w.marginMm === 'number' && w.marginMm > 0 ? w.marginMm : 0,
+      shape:
+        w.shape === 'arch' || w.shape === 'circle' || w.shape === 'triangle' ? w.shape : 'rect',
     }))
   if (
     settings.panelPlacement === 'outside' ||
@@ -1304,6 +1322,7 @@ function restorePersisted() {
             heightMm: d.heightMm as number,
             depthMm: typeof d.depthMm === 'number' ? d.depthMm : 0,
             marginMm: typeof d.marginMm === 'number' && d.marginMm > 0 ? d.marginMm : 0,
+            shape: d.shape === 'arch' ? ('arch' as const) : ('rect' as const),
           }))
       : state.doors
     state.framedWindows = Array.isArray(p.framedWindows)
@@ -1325,6 +1344,10 @@ function restorePersisted() {
             heightMm: w.heightMm as number,
             depthMm: typeof w.depthMm === 'number' ? w.depthMm : 0,
             marginMm: typeof w.marginMm === 'number' && w.marginMm > 0 ? w.marginMm : 0,
+            shape:
+              w.shape === 'arch' || w.shape === 'circle' || w.shape === 'triangle'
+                ? (w.shape as 'arch' | 'circle' | 'triangle')
+                : ('rect' as const),
           }))
       : state.framedWindows
     // Openings last: the geometry fields above may have cleared them via the

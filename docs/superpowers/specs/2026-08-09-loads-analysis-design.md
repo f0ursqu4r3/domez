@@ -95,8 +95,11 @@ export function analyzeLoads(
   - Wind: ŵ = +x. Faces with n̂·ŵ > 0: F = windPa × area × (n̂·ŵ) along
     −n̂ (inward push), split thirds. Leeward suction ignored (disclosed
     as simplified).
-  - Cases: D, D+S, D+W. Per member, envelope = the case with max |N|;
-    record its label and signed force.
+  - Cases: D, D+S, D+W. Per member, envelope = the case with max
+    utilization (u = N ≥ 0 ? |N|/capT : |N|/capC(length)), not the case
+    with max |N|; record its label and signed force. Rationale: max-|N|
+    masks buckling: compression capacity is far below tension capacity
+    for slender members — found in final review.
 - **Member force:** N = (EA/L) · ûᵀ(d_j − d_i), tension positive.
 - **Reactions:** at each support, sum of incident member end forces minus
   applied nodal load; `uplift` = true when the vertical reaction pulls

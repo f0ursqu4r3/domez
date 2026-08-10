@@ -435,7 +435,12 @@ export function buildDomeGroup(
       trimmed.forEach((piece, i) => {
         placeStrut(m, toThree(piece.aUnit, radius), toThree(piece.bUnit, radius))
         mesh.setMatrixAt(i, m)
-        mesh.setColorAt(i, new THREE.Color(strutColor(piece.typeId)))
+        mesh.setColorAt(
+          i,
+          opts.mode === 'loads'
+            ? new THREE.Color(0x6b7280)
+            : new THREE.Color(strutColor(piece.typeId)),
+        )
       })
       mesh.instanceMatrix.needsUpdate = true
       if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true

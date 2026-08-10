@@ -173,6 +173,20 @@ describe('analyzeLoads on a geodesic dome', () => {
     expect(res).toEqual({ ok: false, reason: 'mechanism' })
   })
 
+  it('envelope selects by utilization — buckling is not masked by larger tension', () => {
+    // EMT ¾″ conduit: capC (Euler) ≪ capT, so a smaller compression force
+    // can govern over a larger tension force. Reviewer-verified repro.
+    const emt = { eMPa: 200000, densityKgM3: 7850, sigmaTMPa: 150, sigmaCMPa: 150, wallMm: 1.07 }
+    const sect = { kind: 'round', odMm: 23.4 } as const
+    const res = analyzeLoads(model, 156, 'imperial', sect, emt, INPUTS)
+    expect(res.ok).toBe(true)
+    if (!res.ok) return
+    // Edge 110 buckles under D+W (~149%) though its tension force is larger.
+    expect(res.members[110].utilization).toBeGreaterThan(1.4)
+    expect(res.members[110].forceN).toBeLessThan(0)
+    expect(res.members[110].caseLabel).toBe('D+W')
+  })
+
   it('declines zome and goldberg families honestly', () => {
     const zome = generateZome({ sides: 8, pitchDeg: 45, rows: 4, baseMode: 'natural' })
     const gold = generateGoldberg({ frequency: 2, fraction: '1/2', baseMode: 'natural' })

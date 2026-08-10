@@ -18,7 +18,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { ScrollArea } from '@/components/ui/scroll-area'
 
 const project = useDomeProject()
-const { state, summary, cutList, diameter } = project
+const { state, summary, cutList, diameter, loadsResult } = project
 
 function onReset() {
   if (window.confirm('Reset everything to defaults? Doors, openings, and settings will be cleared.')) {
@@ -134,6 +134,16 @@ const chips = computed(() => [
                     : state.openingTool === 'window'
                       ? 'Placing framed window — click the dome where it goes'
                       : `Placing ${state.openingTool}s — click panels`
+              }}
+            </span>
+            <span
+              v-else-if="state.viewMode === 'loads' && !loadsResult.ok"
+              class="rounded-md border border-amber-500/50 bg-amber-500/10 px-2.5 py-1 text-xs text-amber-500 backdrop-blur-sm"
+            >
+              {{
+                loadsResult.reason === 'unsupported-family'
+                  ? 'Pin-frame is a mechanism — panels carry the shape. No frame-only numbers.'
+                  : 'This frame is not self-supporting as a pin-jointed truss.'
               }}
             </span>
           </div>

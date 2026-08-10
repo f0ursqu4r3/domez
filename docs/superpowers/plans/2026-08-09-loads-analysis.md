@@ -605,22 +605,33 @@ export function analyzeLoads(
   if (!solved) return { ok: false, reason: 'mechanism' }
 
   // ---- Envelope + capacities ----
+  // Envelope by utilization, not by max |N|: Euler compression capacity is
+  // far below tension capacity for slender members, so the case with the
+  // larger force is not necessarily the case that governs. For each case
+  // compute u = N ≥ 0 ? |N|/capT : |N|/capC(length), then keep the case
+  // with the largest u. Rationale: max-|N| masks buckling: compression
+  // capacity is far below tension capacity for slender members — found in
+  // final review.
   const capT = props.sigmaTMPa * 1e6 * A
   const memberResults: MemberResult[] = model.edges.map((e, ei) => {
+    const capC = compressionCapacityN(props, section, lengths[ei])
     let best = 0
+    let bestU = -Infinity
     let bestCase: 'D' | 'D+S' | 'D+W' = 'D'
     cases.forEach((c, ci) => {
       const N = solved.forces[ci][ei]
-      if (Math.abs(N) > Math.abs(best)) {
+      const cap = N >= 0 ? capT : capC
+      const u = cap > 0 ? Math.abs(N) / cap : Infinity
+      if (u > bestU) {
+        bestU = u
         best = N
         bestCase = c.label
       }
     })
-    const cap = best >= 0 ? capT : compressionCapacityN(props, section, lengths[ei])
     return {
       edgeId: e.id,
       forceN: best,
-      utilization: cap > 0 ? Math.abs(best) / cap : Infinity,
+      utilization: bestU,
       caseLabel: bestCase,
     }
   })

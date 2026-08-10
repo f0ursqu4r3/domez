@@ -16,7 +16,7 @@ import {
 } from '@lucide/vue'
 
 const project = useDomeProject()
-const { state, exporters } = project
+const { state, exporters, loadsResult } = project
 const fileInput = ref<HTMLInputElement | null>(null)
 const loadError = ref(false)
 
@@ -102,7 +102,7 @@ const groups = computed(() => [
             },
           ]
         : []),
-      ...(state.mode === 'geodesic'
+      ...(state.mode === 'geodesic' && loadsResult.value.ok
         ? [
             {
               label: 'Loads CSV',

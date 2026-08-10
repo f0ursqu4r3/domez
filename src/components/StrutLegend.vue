@@ -3,7 +3,7 @@ import { useDomeProject } from '@/composables/useDomeProject'
 import { formatLength } from '@/engine/units'
 import { strutColor } from '@/engine/exports/svg'
 
-const { state, cutList, model } = useDomeProject()
+const { state, cutList, model, loadsResult } = useDomeProject()
 
 function select(typeId: number) {
   const first = model.value.strutTypes[typeId]?.edgeIds[0]
@@ -13,9 +13,13 @@ function select(typeId: number) {
 
 <template>
   <div
+    v-if="state.viewMode !== 'loads' || loadsResult.ok"
     class="pointer-events-auto flex flex-col gap-1 rounded-lg border border-border bg-card/90 p-2 backdrop-blur-sm shadow-lg"
   >
-    <div v-if="state.viewMode === 'loads'" class="flex flex-col gap-1.5 text-[10px]">
+    <div
+      v-if="state.viewMode === 'loads' && loadsResult.ok"
+      class="flex flex-col gap-1.5 text-[10px]"
+    >
       <div class="uppercase tracking-widest text-muted-foreground">Utilization</div>
       <div class="flex items-center gap-1.5">
         <div
@@ -36,7 +40,7 @@ function select(typeId: number) {
         <span>over capacity</span>
       </div>
     </div>
-    <template v-else>
+    <template v-else-if="state.viewMode !== 'loads'">
       <button
         v-for="r in cutList.rows.filter((row) => row.kind === 'strut' && row.quantity > 0)"
         :key="r.typeId"

@@ -1,6 +1,7 @@
 import type { DoorwayCut } from './doorway'
 import type { JointMethodId } from './cutlist'
 import type { PanelPlan } from './panels'
+import type { PanelFramePlan } from './panelFrames'
 import type { RiserModel } from './riser'
 import type { DomeModel, UnitSystem } from './types'
 
@@ -44,6 +45,7 @@ export function buildBom(
   riser: RiserModel | null,
   jointId: JointMethodId,
   panelPlan: PanelPlan,
+  framePlan?: PanelFramePlan | null,
 ): BomLine[] {
   const lines: BomLine[] = []
   const keptVerts = model.vertices.filter((v) => !doorway.removedVertices.has(v.id))
@@ -84,6 +86,12 @@ export function buildBom(
       quantity: 2 * strutEnds,
       note: '2 per strut end (assumption)',
     })
+  } else if (jointId === 'framed-panel' && framePlan) {
+    lines.push(
+      { key: 'bolt', label: 'Bolts', quantity: framePlan.boltCount, note: '1 per seam interval' },
+      { key: 'nut', label: 'Nuts', quantity: framePlan.boltCount },
+      { key: 'washer', label: 'Washers', quantity: 2 * framePlan.boltCount },
+    )
   } else {
     lines.push({
       key: 'screw-structural',

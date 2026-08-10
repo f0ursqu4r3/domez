@@ -1,6 +1,7 @@
 import type { CutList } from '../cutlist'
 import type { DoorFrameInfo } from '../doorway'
 import type { PanelPlan } from '../panels'
+import type { PanelFramePlan } from '../panelFrames'
 import type { PackingResult } from '../packing'
 import type { OpeningGroup } from '../openings'
 import type { DomeModel, UnitSystem } from '../types'
@@ -190,6 +191,39 @@ export function panelsCsv(plan: PanelPlan, units: UnitSystem): string {
   lines.push(row('Total panels', plan.totalPanels))
   lines.push(row(`Total sheets (${plan.sheetLabel})`, plan.totalSheets))
   lines.push(row('Sheet waste', `${(plan.wasteFraction * 100).toFixed(1)}%`))
+  return lines.join('\n')
+}
+
+/** Framed-panel member takeoff: one row per distinct member spec per type. */
+export function framesCsv(plan: PanelFramePlan, units: UnitSystem): string {
+  const lines = [
+    row(
+      'type',
+      'member',
+      'qty',
+      'long_point',
+      'miter_start_deg',
+      'miter_end_deg',
+      'bevel_deg',
+      'boundary',
+    ),
+  ]
+  for (const t of plan.types) {
+    for (const m of t.members) {
+      lines.push(
+        row(
+          t.label,
+          m.label,
+          m.count * t.panelCount,
+          formatLength(m.longPointLength, units),
+          m.miterStartDeg.toFixed(1),
+          m.miterEndDeg.toFixed(1),
+          m.bevelDeg.toFixed(1),
+          m.boundary ? 'yes' : 'no',
+        ),
+      )
+    }
+  }
   return lines.join('\n')
 }
 

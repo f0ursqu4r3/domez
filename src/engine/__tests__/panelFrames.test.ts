@@ -4,6 +4,11 @@ import { generateDome } from '../dome'
 import { generateZome } from '../zome'
 import { generateGoldberg } from '../goldberg'
 import { emptyDoorwayCut } from '../doorway'
+import { buildCutList } from '../cutlist'
+import { packCuts } from '../packing'
+import { buildBom } from '../bom'
+import { planPanels } from '../panels'
+import { framesCsv } from '../exports/csv'
 
 // Match the exact generator/param call shapes used in engine.test.ts, and
 // the actual empty-doorway helper name exported by doorway.ts (grep for the
@@ -87,5 +92,56 @@ describe('panel frames', () => {
         expect(edgeLengths.has(mem.longPointLength.toFixed(1))).toBe(true)
       }
     }
+  })
+
+  it('framed-panel cut list: strut rows replaced by frame member rows', () => {
+    const m = generateDome({ frequency: 3, fraction: '1/2', baseMode: 'leveled' })
+    const plan = buildPanelFrames(m, 156, 'imperial', NO_DOOR)
+    const cl = buildCutList(
+      m,
+      { radius: 156, increment: 1 / 8, endOffset: 0, units: 'imperial', jointId: 'framed-panel' },
+      NO_DOOR,
+      null,
+      plan,
+    )
+    const expectedRowCount = plan.types.reduce((n, t) => n + t.members.length, 0)
+    expect(cl.rows.length).toBe(expectedRowCount)
+    for (const row of cl.rows) {
+      expect(Number.isNaN(row.axialAngleDeg)).toBe(true)
+      expect(row.kind).toBe('strut')
+    }
+    for (const t of plan.types) {
+      for (const mem of t.members) {
+        const row = cl.rows.find((r) => r.label === mem.label)
+        expect(row).toBeDefined()
+        expect(row!.quantity).toBe(mem.count * t.panelCount)
+      }
+    }
+    // Packing still packs every row.
+    const packing = packCuts(cl, { kerf: 1 / 8, stock: [{ length: 144, label: '12 ft' }] })
+    const placed = packing.boards.reduce((n, b) => n + b.cuts.length, 0)
+    expect(placed).toBe(cl.totalStruts)
+  })
+
+  it('framed-panel BOM: bolts sized to seam intervals, no hub hardware', () => {
+    const m = generateDome({ frequency: 3, fraction: '1/2', baseMode: 'leveled' })
+    const plan = buildPanelFrames(m, 156, 'imperial', NO_DOOR)
+    const panelPlan = planPanels(m, 156, { sheetW: 48, sheetL: 96, sheetLabel: '4×8', skinFactor: 1 })
+    const bom = buildBom(m, NO_DOOR, null, 'framed-panel', panelPlan, plan)
+    const boltLine = bom.find((l) => l.key === 'bolt')
+    expect(boltLine).toBeDefined()
+    expect(boltLine!.quantity).toBe(plan.boltCount)
+    expect(bom.some((l) => l.key === 'hub-connector')).toBe(false)
+    expect(bom.some((l) => l.key === 'hub-plate')).toBe(false)
+    expect(bom.some((l) => l.key === 'screw-panel')).toBe(true)
+  })
+
+  it('framesCsv emits one row per member spec, plus a header', () => {
+    const m = generateDome({ frequency: 3, fraction: '1/2', baseMode: 'leveled' })
+    const plan = buildPanelFrames(m, 156, 'imperial', NO_DOOR)
+    const csv = framesCsv(plan, 'imperial')
+    const lineCount = csv.split('\n').length
+    const specCount = plan.types.reduce((n, t) => n + t.members.length, 0)
+    expect(lineCount).toBe(1 + specCount)
   })
 })

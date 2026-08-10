@@ -18,6 +18,7 @@ import {
   type DoorSpec,
 } from '@/engine/doorway'
 import { planPanels } from '@/engine/panels'
+import { buildPanelFrames } from '@/engine/panelFrames'
 import { buildRiser } from '@/engine/riser'
 import { buildBom, estimateCost } from '@/engine/bom'
 import { generateZome } from '@/engine/zome'
@@ -33,6 +34,7 @@ import {
   miterCsv,
   costsCsv,
   loadsCsv as loadsCsvText,
+  framesCsv as framesCsvText,
 } from '@/engine/exports/csv'
 import { analyzeLoads, type StructureProps } from '@/engine/loads'
 import { cutTemplatesSvg, boardDiagramsSvg } from '@/engine/exports/templates'
@@ -455,9 +457,11 @@ const cutList = computed(() =>
       increment: state.increment,
       endOffset: workingEndOffset.value,
       units: state.units,
+      jointId: state.jointId,
     },
     doorway.value,
     riser.value,
+    framePlan.value,
   ),
 )
 
@@ -518,6 +522,14 @@ const doorway = computed(() =>
         studSpacing: studSpacing.value,
         riserHeight: workingRiserHeight.value,
       }),
+)
+
+/** Framed-panel ("double wall") joint takeoff — independent per-panel jigs
+ * bolted at every seam. Null unless that joint method is active. */
+const framePlan = computed(() =>
+  state.jointId === 'framed-panel'
+    ? buildPanelFrames(model.value, radius.value, state.units, doorway.value)
+    : null,
 )
 
 /** Split doorway results for the UI: D* are doors, W* framed windows. */
@@ -738,7 +750,7 @@ const summary = computed(() => {
 
 /** Hardware bill of materials for the current build. */
 const bom = computed(() =>
-  buildBom(model.value, doorway.value, riser.value, state.jointId, panelPlan.value),
+  buildBom(model.value, doorway.value, riser.value, state.jointId, panelPlan.value, framePlan.value),
 )
 
 /** Priced build estimate through the editable price book. */
@@ -855,6 +867,11 @@ const exporters = {
     ),
   panelsCsv: () =>
     download(`${fileStem.value}-panels.csv`, panelsCsv(panelPlan.value, state.units), 'text/csv'),
+  framesCsv: () => {
+    const plan = framePlan.value
+    if (!plan) return
+    download(`${fileStem.value}-frames.csv`, framesCsvText(plan, state.units), 'text/csv')
+  },
   miterCsv: () =>
     download(
       `${fileStem.value}-miter-cuts.csv`,
@@ -1428,6 +1445,7 @@ export function useDomeProject() {
     riser,
     riserHeight,
     workingRiserHeight,
+    framePlan,
     bom,
     costEstimate,
     loadsResult,

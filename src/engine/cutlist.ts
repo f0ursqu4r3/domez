@@ -1,9 +1,10 @@
 import type { DomeModel, UnitSystem } from './types'
 import type { DoorwayCut } from './doorway'
 import type { RiserModel } from './riser'
+import type { PanelFramePlan } from './panelFrames'
 import { roundToIncrement } from './units'
 
-export type JointMethodId = 'hub' | 'flattened-pipe' | 'timber-plate' | 'mitered'
+export type JointMethodId = 'hub' | 'flattened-pipe' | 'timber-plate' | 'mitered' | 'framed-panel'
 
 export interface JointMethod {
   id: JointMethodId
@@ -37,6 +38,12 @@ export const JOINT_METHODS: JointMethod[] = [
     label: 'Mitered hubless',
     defaultEndOffset: 0,
     note: 'Struts run full chord to the vertex; each end is compound-cut against its neighbors (export the miter CSV) — glued/screwed seams, no hub hardware. Timber only.',
+  },
+  {
+    id: 'framed-panel',
+    label: 'Framed panels (double wall)',
+    defaultEndOffset: 0,
+    note: 'Each panel is built independently on a jig and bolted to its neighbors — doubled lumber at every seam, no hub hardware. End offset does not apply.',
   },
 ]
 
@@ -78,6 +85,9 @@ export interface CutListOptions {
   /** Material removed at each strut end (working units). */
   endOffset: number
   units: UnitSystem
+  /** Active joint method — when 'framed-panel' and a framePlan is supplied,
+   * strut/trimmed rows are replaced by frame member rows. */
+  jointId?: JointMethodId
 }
 
 /**
@@ -94,7 +104,10 @@ export function buildCutList(
   opts: CutListOptions,
   doorway?: DoorwayCut,
   riser?: RiserModel | null,
+  framePlan?: PanelFramePlan | null,
 ): CutList {
+  const useFramePlan = opts.jointId === 'framed-panel' && !!framePlan
+
   const removedPerType = new Map<number, number>()
   if (doorway) {
     for (const eid of [...doorway.removedEdges, ...doorway.trimmedEdges]) {
@@ -103,56 +116,78 @@ export function buildCutList(
     }
   }
 
-  const rows: CutListRow[] = model.strutTypes.map((t) => {
-    const chordLength = t.chordFactor * opts.radius
-    const exact = Math.max(0, chordLength - 2 * opts.endOffset)
-    const rounded = roundToIncrement(exact, opts.increment)
-    return {
-      typeId: t.id,
-      label: t.label,
-      quantity: t.count - (removedPerType.get(t.id) ?? 0),
-      chordLength,
-      exactCutLength: exact,
-      roundedCutLength: rounded,
-      roundingError: Math.abs(rounded - exact),
-      axialAngleDeg: t.axialAngleDeg,
-      dihedralMinDeg: t.dihedralMinDeg,
-      dihedralMaxDeg: t.dihedralMaxDeg,
-      kind: 'strut' as const,
-    }
-  })
+  const rows: CutListRow[] = useFramePlan
+    ? framePlan!.types.flatMap((t) =>
+        t.members.map((m) => {
+          const exact = m.longPointLength
+          const rounded = roundToIncrement(exact, opts.increment)
+          return {
+            typeId: -1,
+            label: m.label,
+            quantity: m.count * t.panelCount,
+            chordLength: exact,
+            exactCutLength: exact,
+            roundedCutLength: rounded,
+            roundingError: Math.abs(rounded - exact),
+            axialAngleDeg: NaN,
+            dihedralMinDeg: NaN,
+            dihedralMaxDeg: NaN,
+            kind: 'strut' as const,
+          }
+        }),
+      )
+    : model.strutTypes.map((t) => {
+        const chordLength = t.chordFactor * opts.radius
+        const exact = Math.max(0, chordLength - 2 * opts.endOffset)
+        const rounded = roundToIncrement(exact, opts.increment)
+        return {
+          typeId: t.id,
+          label: t.label,
+          quantity: t.count - (removedPerType.get(t.id) ?? 0),
+          chordLength,
+          exactCutLength: exact,
+          roundedCutLength: rounded,
+          roundingError: Math.abs(rounded - exact),
+          axialAngleDeg: t.axialAngleDeg,
+          dihedralMinDeg: t.dihedralMinDeg,
+          dihedralMaxDeg: t.dihedralMaxDeg,
+          kind: 'strut' as const,
+        }
+      })
 
   if (doorway) {
-    // Trimmed pieces, grouped by (type, rounded length). One end keeps its
-    // hub cut; the other lands square on the buck, so no end offset there.
-    const trimmedGroups = new Map<string, { typeId: number; rounded: number; exact: number; qty: number; doorIds: Set<string> }>()
-    for (const piece of doorway.trimmed) {
-      const exact = Math.max(0, piece.length - opts.endOffset)
-      const rounded = roundToIncrement(exact, opts.increment)
-      const key = `${piece.typeId}:${rounded.toFixed(6)}`
-      const g = trimmedGroups.get(key) ?? {
-        typeId: piece.typeId, rounded, exact, qty: 0, doorIds: new Set<string>(),
+    if (!useFramePlan) {
+      // Trimmed pieces, grouped by (type, rounded length). One end keeps its
+      // hub cut; the other lands square on the buck, so no end offset there.
+      const trimmedGroups = new Map<string, { typeId: number; rounded: number; exact: number; qty: number; doorIds: Set<string> }>()
+      for (const piece of doorway.trimmed) {
+        const exact = Math.max(0, piece.length - opts.endOffset)
+        const rounded = roundToIncrement(exact, opts.increment)
+        const key = `${piece.typeId}:${rounded.toFixed(6)}`
+        const g = trimmedGroups.get(key) ?? {
+          typeId: piece.typeId, rounded, exact, qty: 0, doorIds: new Set<string>(),
+        }
+        g.qty++
+        g.doorIds.add(piece.doorId)
+        trimmedGroups.set(key, g)
       }
-      g.qty++
-      g.doorIds.add(piece.doorId)
-      trimmedGroups.set(key, g)
-    }
-    for (const g of [...trimmedGroups.values()].sort((a, b) => a.typeId - b.typeId || a.rounded - b.rounded)) {
-      const t = model.strutTypes[g.typeId]
-      rows.push({
-        typeId: g.typeId,
-        label: `${t.label}†`,
-        quantity: g.qty,
-        chordLength: g.exact + opts.endOffset,
-        exactCutLength: g.exact,
-        roundedCutLength: g.rounded,
-        roundingError: Math.abs(g.rounded - g.exact),
-        axialAngleDeg: t.axialAngleDeg,
-        dihedralMinDeg: NaN,
-        dihedralMaxDeg: NaN,
-        kind: 'trimmed',
-        note: `trimmed to ${[...g.doorIds].join(', ')} buck; hub cut one end, square cut at buck`,
-      })
+      for (const g of [...trimmedGroups.values()].sort((a, b) => a.typeId - b.typeId || a.rounded - b.rounded)) {
+        const t = model.strutTypes[g.typeId]
+        rows.push({
+          typeId: g.typeId,
+          label: `${t.label}†`,
+          quantity: g.qty,
+          chordLength: g.exact + opts.endOffset,
+          exactCutLength: g.exact,
+          roundedCutLength: g.rounded,
+          roundingError: Math.abs(g.rounded - g.exact),
+          axialAngleDeg: t.axialAngleDeg,
+          dihedralMinDeg: NaN,
+          dihedralMaxDeg: NaN,
+          kind: 'trimmed',
+          note: `trimmed to ${[...g.doorIds].join(', ')} buck; hub cut one end, square cut at buck`,
+        })
+      }
     }
 
     for (const door of doorway.doors) {

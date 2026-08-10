@@ -1,4 +1,14 @@
 import type { DomeModel, Vec3 } from './types'
+import {
+  archTooFlat,
+  effectiveHeight,
+  offsetConvexOutward,
+  openingArea,
+  openingOutline,
+  type OpeningShapeKind,
+} from './openingShapes'
+
+export type { OpeningShapeKind } from './openingShapes'
 
 /** A parametric doorway standing on the base plane. Working units. */
 export interface DoorSpec {
@@ -8,8 +18,13 @@ export interface DoorSpec {
   azimuthDeg: number
   /** Rough opening width. */
   width: number
-  /** Rough opening height above the base plane. */
+  /** Rough opening height above the base plane. Ignored (= width) for
+   * circle — see `effectiveHeight`. */
   height: number
+  /** Opening shape; default 'rect'. Arch/circle/triangle cut struts, panels
+   * and vertices like a rect does, but their closure (sheathing + framing)
+   * is reported as zero/empty until Task 3. */
+  shape?: OpeningShapeKind
   /** Recess of the buck plane relative to the auto fit. Positive = deeper
    * entry; negative pushes the buck outward toward (or proud of) the shell,
    * clamped to the base ring radius. */
@@ -189,6 +204,16 @@ export function emptyDoorwayCut(): DoorwayCut {
   }
 }
 
+/** A half-plane of the door's cut envelope in local (t, hRel) coordinates:
+ * inside = nt·t + nz·(z − z0) ≤ c. Built from the margined opening outline
+ * (one plane per polygon edge); floor-standing doors drop the bottom edge's
+ * plane entirely (see `buildEnvelopePlanes`). */
+interface EnvelopePlane {
+  nt: number
+  nz: number
+  c: number
+}
+
 interface DoorFrame {
   spec: DoorSpec
   /** Radial horizontal unit vector at the azimuth. */
@@ -196,25 +221,85 @@ interface DoorFrame {
   uy: number
   /** Base plane height, working units (cutZ × radius). */
   z0: number
-  /** Cut envelope: buck + margin. */
-  halfWidth: number
-  /** Envelope vertical bounds relative to the base plane. zClipLow is -inf
-   * for doors (nothing below the base) and sill - margin for windows. */
-  zClipLow: number
-  zClipHigh: number
+  /** Convex polygon half-planes bounding the cut envelope (t, hRel). */
+  planes: EnvelopePlane[]
   /** Cutting starts here — the buck plane, or the auto-fit plane when the
    * buck projects beyond it (the walkway must still pierce the shell).
    * Struts behind this plane pass through untouched. */
   cutPlaneDist: number
 }
 
+/** Convex polygon half-planes for the door's cut envelope: the margined
+ * opening outline, one plane per edge. Floor-standing doors (not a window)
+ * skip the bottom edge's plane entirely — this reproduces the legacy
+ * `zClipLow = -1e9` behavior so base-ring struts aren't borderline-excluded
+ * by an edge that, for a door, isn't really a boundary (the portal continues
+ * down through the riser/base, off the bottom of the shell). */
+function buildEnvelopePlanes(
+  shape: OpeningShapeKind,
+  width: number,
+  effH: number,
+  buckBottomRel: number,
+  margin: number,
+  isWindow: boolean,
+): EnvelopePlane[] {
+  const poly = offsetConvexOutward(
+    openingOutline(shape, width, effH, buckBottomRel),
+    margin,
+    isWindow ? margin : 0,
+  )
+  const n = poly.length
+  const edges = poly.map((a, i) => {
+    const b = poly[(i + 1) % n]
+    const dx = b[0] - a[0]
+    const dy = b[1] - a[1]
+    const len = Math.hypot(dx, dy) || 1
+    return { nt: dy / len, nz: -dx / len, a, midH: (a[1] + b[1]) / 2 }
+  })
+  // Same bottom-edge detection as offsetConvexOutward's bottomIdx: the
+  // edge with an (almost) straight-down normal, breaking ties by height.
+  let bottomIdx = -1
+  let bottomH = Infinity
+  if (!isWindow) {
+    edges.forEach((e, i) => {
+      if (e.nz < -0.99 && e.midH < bottomH) {
+        bottomH = e.midH
+        bottomIdx = i
+      }
+    })
+  }
+  return edges
+    .filter((_, i) => i !== bottomIdx)
+    .map((e) => ({ nt: e.nt, nz: e.nz, c: e.nt * e.a[0] + e.nz * e.a[1] }))
+}
+
 /** Interval [s0, s1] of a segment inside the door passage, or null. The
  * passage is the cut envelope extruded radially OUTWARD from the buck plane:
- * |tangential| ≤ hw, z ≤ base + h, radial ≥ buck plane. Struts passing
- * behind the buck plane connect through untouched. */
+ * inside every envelope plane, radial ≥ buck plane. Struts passing behind
+ * the buck plane connect through untouched. */
 function insideInterval(frame: DoorFrame, a: Vec3, b: Vec3): [number, number] | null {
   let s0 = 0
   let s1 = 1
+  // One-sided clip: constrains s so lerp(fa, fb, s) ≤ hi.
+  const clipMax = (fa: number, fb: number, hi: number): boolean => {
+    const d = fb - fa
+    if (Math.abs(d) < 1e-12) {
+      return fa <= hi
+    }
+    const t = (hi - fa) / d
+    if (d > 0) s1 = Math.min(s1, t)
+    else s0 = Math.max(s0, t)
+    return s1 > s0
+  }
+  const tA = -frame.uy * a[0] + frame.ux * a[1]
+  const tB = -frame.uy * b[0] + frame.ux * b[1]
+  const zA = a[2] - frame.z0
+  const zB = b[2] - frame.z0
+  for (const p of frame.planes) {
+    if (!clipMax(p.nt * tA + p.nz * zA, p.nt * tB + p.nz * zB, p.c)) return null
+  }
+  // Two-sided clip (hi effectively infinite) for the radial bound — unchanged
+  // from before the polygon generalization.
   const clip = (fa: number, fb: number, lo: number, hi: number): boolean => {
     const d = fb - fa
     if (Math.abs(d) < 1e-12) {
@@ -227,12 +312,6 @@ function insideInterval(frame: DoorFrame, a: Vec3, b: Vec3): [number, number] | 
     s1 = Math.min(s1, t1)
     return s1 > s0
   }
-  const tA = -frame.uy * a[0] + frame.ux * a[1]
-  const tB = -frame.uy * b[0] + frame.ux * b[1]
-  if (!clip(tA, tB, -frame.halfWidth, frame.halfWidth)) return null
-  const zA = a[2] - frame.z0
-  const zB = b[2] - frame.z0
-  if (!clip(zA, zB, frame.zClipLow, frame.zClipHigh)) return null
   const uA = frame.ux * a[0] + frame.uy * a[1]
   const uB = frame.ux * b[0] + frame.uy * b[1]
   if (!clip(uA, uB, frame.cutPlaneDist, 1e12)) return null
@@ -242,13 +321,11 @@ function insideInterval(frame: DoorFrame, a: Vec3, b: Vec3): [number, number] | 
 function insidePoint(frame: DoorFrame, p: Vec3): boolean {
   const t = -frame.uy * p[0] + frame.ux * p[1]
   const z = p[2] - frame.z0
+  for (const pl of frame.planes) {
+    if (pl.nt * t + pl.nz * z > pl.c) return false
+  }
   const u = frame.ux * p[0] + frame.uy * p[1]
-  return (
-    Math.abs(t) <= frame.halfWidth &&
-    z >= frame.zClipLow &&
-    z <= frame.zClipHigh &&
-    u >= frame.cutPlaneDist
-  )
+  return u >= frame.cutPlaneDist
 }
 
 const lerp3 = (a: Vec3, b: Vec3, s: number): Vec3 => [
@@ -407,6 +484,10 @@ export function cutDoorways(
   const frames: DoorFrame[] = []
 
   for (const spec of doors) {
+    const shape: OpeningShapeKind = spec.shape ?? 'rect'
+    // Circle's true height is its width; every other shape passes height
+    // through unchanged.
+    const effH = effectiveHeight(shape, spec.width, spec.height)
     const az = (spec.azimuthDeg * Math.PI) / 180
     const ux = Math.cos(az)
     const uy = Math.sin(az)
@@ -418,19 +499,25 @@ export function cutDoorways(
     const isWindow = sill > 0
     // Portal dims are floor-referenced; the shell works from the base plane.
     const buckBottomRel = (isWindow ? sill : 0) - riser
-    const buckTopRel = buckBottomRel + spec.height
+    const buckTopRel = buckBottomRel + effH
     const riserConflict =
       riser > 0 && (isWindow ? buckBottomRel - margin < 0 : buckTopRel <= 0)
-    // The part of the buck below the base plane sits in the riser wall, not
-    // the shell — only the above-base corners constrain the sphere.
-    const zBotAbs = z0 + Math.max(0, buckBottomRel)
-    const zTopAbs = z0 + buckTopRel
+    // An arch shorter than a semicircle (height < width/2) can't exist —
+    // refuse to fit and cut nothing, rather than push a degenerate outline.
+    const tooFlat = archTooFlat(shape, spec.width, spec.height)
 
-    // All four buck corners must fit inside the sphere.
-    const fitSq =
-      radius * radius - Math.max(zTopAbs * zTopAbs, zBotAbs * zBotAbs) - halfBuck * halfBuck
-    const fits = fitSq > 0 && !riserConflict
-    // Auto fit puts the buck corners on the sphere. Positive extra depth
+    // Every vertex of the PRE-margin outline must land inside the sphere.
+    // Below-base vertices don't constrain (they sit in the riser/base, not
+    // the shell) — matches the legacy max(0, buckBottomRel) rule.
+    const preMarginPoly = tooFlat ? [] : openingOutline(shape, spec.width, effH, buckBottomRel)
+    let maxTerm = 0
+    for (const [t, hRel] of preMarginPoly) {
+      const zAbs = z0 + Math.max(0, hRel)
+      maxTerm = Math.max(maxTerm, zAbs * zAbs + t * t)
+    }
+    const fitSq = radius * radius - maxTerm
+    const fits = !tooFlat && fitSq > 0 && !riserConflict
+    // Auto fit puts the outline vertices on the sphere. Positive extra depth
     // recesses the buck (clamped clear of the dome center); negative pushes
     // it outward — past the base ring the entry becomes a projecting
     // vestibule, sealed by the same closure rules.
@@ -447,13 +534,15 @@ export function cutDoorways(
 
     // ---- Faceted closure from the actual shell. The closure seals the
     // region BETWEEN the shell section and the buck plane: outside the buck
-    // for a recessed entry, outside the shell for a projecting one. ----
+    // for a recessed entry, outside the shell for a projecting one.
+    // Rect only — shaped closures land in Task 3; until then shaped specs
+    // still cut struts/panels/vertices below, but report a zero closure. ----
     let closureProfile: ClosureProfile | null = null
     let closureSideArea = 0
     let closureTopArea = 0
     let closureBottomArea = 0
     const closureFraming: ClosureMember[] = []
-    if (fits) {
+    if (fits && shape === 'rect') {
       const tris = localTriangles(model, radius, ux, uy)
       const wallFor = (side: -1 | 1): [number, number][] => {
         const segs = sectionSegments(tris, 1, side * halfEnv, 0, 2).filter(
@@ -670,7 +759,7 @@ export function cutDoorways(
       joints.add(jkey(m.side, m.a[0], m.a[1]))
       joints.add(jkey(m.side, m.b[0], m.b[1]))
     }
-    if (fits) {
+    if (fits && shape === 'rect') {
       joints.add(jkey(9, -halfBuck, buckBottomRel))
       joints.add(jkey(9, halfBuck, buckBottomRel))
       joints.add(jkey(9, -halfBuck, buckTopRel))
@@ -691,29 +780,28 @@ export function cutDoorways(
       trimmedStrutCount: 0,
       removedHubCount: 0,
       removedPanelCount: 0,
-      area: spec.width * spec.height,
+      area: openingArea(shape, spec.width, spec.height),
       closureSideArea,
       closureTopArea,
       closureBottomArea,
-      closureFaceArea: fits
-        ? 2 * halfEnv * (zHighRel - zLowRel) -
-          spec.width * Math.max(0, Math.min(buckTopRel, zHighRel) - Math.max(buckBottomRel, zLowRel))
-        : 0,
+      closureFaceArea:
+        fits && shape === 'rect'
+          ? 2 * halfEnv * (zHighRel - zLowRel) -
+            spec.width * Math.max(0, Math.min(buckTopRel, zHighRel) - Math.max(buckBottomRel, zLowRel))
+          : 0,
       closureFraming,
       closureJointCount: joints.size,
       closureProfile,
     })
 
-    // A riser-conflicted portal cuts nothing.
-    if (!riserConflict) {
+    // A riser-conflicted or too-flat-arch portal cuts nothing.
+    if (!riserConflict && !tooFlat) {
       frames.push({
         spec,
         ux,
         uy,
         z0,
-        halfWidth: halfEnv,
-        zClipLow: isWindow ? zLowRel : -1e9,
-        zClipHigh: zHighRel,
+        planes: buildEnvelopePlanes(shape, spec.width, effH, buckBottomRel, margin, isWindow),
         cutPlaneDist: fits ? Math.min(framePlaneDist, Math.sqrt(fitSq)) : framePlaneDist,
       })
     }
@@ -853,13 +941,14 @@ function placementStats(
   const z0 = model.cutZ * radius
   // Zone heights are shell-relative: shift a floor-referenced sill down by the riser.
   const sillZone = Math.max(0, (spec.sillHeight ?? 0) - (opts.riserHeight ?? 0))
+  const effH = effectiveHeight(spec.shape ?? 'rect', spec.width, spec.height)
   const inZone = (x: number, y: number, z: number) => {
     const u = ux * x + uy * y
     const t = -uy * x + ux * y
     const h = z - z0
     return u > radius * 0.4 &&
-      h >= sillZone - spec.height * 0.25 &&
-      h <= sillZone + spec.height * 1.25 &&
+      h >= sillZone - effH * 0.25 &&
+      h <= sillZone + effH * 1.25 &&
       Math.abs(t) <= spec.width
       ? Math.abs(t)
       : Infinity

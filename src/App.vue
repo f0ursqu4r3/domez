@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { computed } from 'vue'
-import { RotateCcw } from '@lucide/vue'
+import { computed, ref } from 'vue'
+import { RotateCcw, Share2, Check } from '@lucide/vue'
 import { useDomeProject } from '@/composables/useDomeProject'
 import { formatLength } from '@/engine/units'
 import { Button } from '@/components/ui/button'
@@ -23,6 +23,14 @@ const { state, summary, cutList, diameter, loadsResult } = project
 function onReset() {
   if (window.confirm('Reset everything to defaults? Doors, openings, and settings will be cleared.')) {
     project.resetProject()
+  }
+}
+
+const copied = ref(false)
+async function onShare() {
+  if (await project.copyShareLink()) {
+    copied.value = true
+    setTimeout(() => (copied.value = false), 1500)
   }
 }
 
@@ -96,6 +104,16 @@ const chips = computed(() => [
           }}</span>
           <span class="font-mono text-xs">{{ chip.value }}</span>
         </span>
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          class="shrink-0 text-muted-foreground hover:text-foreground"
+          title="Copy share link — the URL encodes the whole project"
+          @click="onShare"
+        >
+          <Check v-if="copied" class="text-emerald-500" />
+          <Share2 v-else />
+        </Button>
         <Button
           variant="ghost"
           size="icon-sm"

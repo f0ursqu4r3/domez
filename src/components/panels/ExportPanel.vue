@@ -13,6 +13,7 @@ import {
   Boxes,
   Tag,
   ClipboardList,
+  Share2,
 } from '@lucide/vue'
 
 const project = useDomeProject()
@@ -130,6 +131,12 @@ const groups = computed(() => [
         desc: 'settings + derived data',
         icon: FileJson,
         run: exporters.json,
+      },
+      {
+        label: 'Copy share link',
+        desc: 'URL encodes the whole project',
+        icon: Share2,
+        run: () => void project.copyShareLink(),
       },
     ],
   },

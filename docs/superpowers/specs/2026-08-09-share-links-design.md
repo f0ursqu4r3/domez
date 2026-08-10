@@ -81,11 +81,16 @@ export async function decodeShare(payload: string): Promise<ProjectSettings | nu
 ## UI
 
 - **Header (App.vue):** a ghost icon button (lucide `Share2`) next to the
-  Reset button. Click → `await shareLink()` →
-  `navigator.clipboard.writeText(url)`; on success the icon becomes
-  lucide `Check` for 1.5 s (local ref + setTimeout), then reverts. If the
-  clipboard write throws, fall back to `window.prompt('Copy share link:', url)`.
+  Reset button. On success the icon becomes lucide `Check` for 1.5 s
+  (local ref + setTimeout), then reverts.
   Title: "Copy share link — the URL encodes the whole project".
+  **Amended post-ship:** the clipboard write hands the encode promise to
+  `ClipboardItem` instead of awaiting first — Safari revokes the
+  user-gesture activation across an `await`, which made the fallback
+  fire on every click there. And the fallback is no longer
+  `window.prompt` (unthemed, no copy affordance): a shadcn Dialog
+  ("Share link") shows the URL in a select-on-focus readonly input with
+  a Copy button (fresh gesture → the retry write succeeds) and Done.
 - **Build tab (ExportPanel.vue):** in the Project group after Project
   JSON: label "Copy share link", desc "URL encodes the whole project",
   icon `Share2`, runs the same copy-with-fallback action (a small shared

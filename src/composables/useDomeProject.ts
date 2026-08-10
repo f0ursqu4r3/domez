@@ -1106,15 +1106,28 @@ async function shareLink(): Promise<string> {
   return `${location.origin}${location.pathname}#${await encodeShare(projectSettings.value)}`
 }
 
-/** Copy the share URL; prompt() fallback when the clipboard is denied.
- * Returns true when the clipboard write succeeded. */
+/** Set when the clipboard write fails — App.vue shows a themed dialog
+ * with the URL and a manual Copy button. */
+const shareFallbackUrl = ref<string | null>(null)
+
+/** Copy the share URL. Safari revokes the user-gesture activation across
+ * an await, so the encode promise is handed to ClipboardItem instead of
+ * being awaited before the write. Returns true when the write succeeded;
+ * on failure the fallback dialog takes over. */
 async function copyShareLink(): Promise<boolean> {
-  const url = await shareLink()
+  const urlPromise = shareLink()
   try {
-    await navigator.clipboard.writeText(url)
+    if (typeof ClipboardItem !== 'undefined' && navigator.clipboard?.write) {
+      const item = new ClipboardItem({
+        'text/plain': urlPromise.then((u) => new Blob([u], { type: 'text/plain' })),
+      })
+      await navigator.clipboard.write([item])
+    } else {
+      await navigator.clipboard.writeText(await urlPromise)
+    }
     return true
   } catch {
-    window.prompt('Copy share link:', url)
+    shareFallbackUrl.value = await urlPromise
     return false
   }
 }
@@ -1439,6 +1452,7 @@ export function useDomeProject() {
     loadProjectFile,
     shareLink,
     copyShareLink,
+    shareFallbackUrl,
     pendingShare,
     applyPendingShare,
     titleOf,

@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
-import { RotateCcw, Share2, Check } from '@lucide/vue'
+import { RotateCcw, Share2, Check, Copy } from '@lucide/vue'
 import { useDomeProject } from '@/composables/useDomeProject'
 import { formatLength } from '@/engine/units'
 import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
 import {
   Dialog,
   DialogContent,
@@ -26,7 +27,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { ScrollArea } from '@/components/ui/scroll-area'
 
 const project = useDomeProject()
-const { state, summary, cutList, diameter, loadsResult, pendingShare } = project
+const { state, summary, cutList, diameter, loadsResult, pendingShare, shareFallbackUrl } = project
 
 function onReset() {
   if (window.confirm('Reset everything to defaults? Doors, openings, and settings will be cleared.')) {
@@ -42,6 +43,29 @@ async function onShare() {
     clearTimeout(copiedTimer)
     copiedTimer = setTimeout(() => (copied.value = false), 1500)
   }
+}
+
+// Fallback-dialog copy: runs in a fresh user gesture with no await before
+// the write, so it succeeds where the original gesture was lost.
+const fallbackCopied = ref(false)
+function onFallbackCopy() {
+  const url = shareFallbackUrl.value
+  if (!url) return
+  navigator.clipboard.writeText(url).then(
+    () => {
+      fallbackCopied.value = true
+      setTimeout(() => {
+        fallbackCopied.value = false
+        shareFallbackUrl.value = null
+      }, 900)
+    },
+    () => {
+      // Clipboard fully unavailable — leave the selected text for ⌘C.
+    },
+  )
+}
+function selectAll(ev: FocusEvent) {
+  ;(ev.target as HTMLInputElement).select()
 }
 
 const chips = computed(() => [
@@ -227,6 +251,34 @@ const chips = computed(() => [
         <DialogFooter>
           <Button variant="outline" @click="project.applyPendingShare(false)">Keep my project</Button>
           <Button @click="project.applyPendingShare(true)">Load shared project</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+
+    <Dialog
+      :open="!!shareFallbackUrl"
+      @update:open="(v: boolean) => !v && (shareFallbackUrl = null)"
+    >
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Share link</DialogTitle>
+          <DialogDescription>
+            The URL encodes the whole project — copy it and send it to anyone.
+          </DialogDescription>
+        </DialogHeader>
+        <Input
+          class="font-mono text-xs"
+          readonly
+          :model-value="shareFallbackUrl ?? ''"
+          @focus="selectAll"
+        />
+        <DialogFooter>
+          <Button variant="outline" @click="shareFallbackUrl = null">Done</Button>
+          <Button @click="onFallbackCopy">
+            <Check v-if="fallbackCopied" data-icon="inline-start" class="text-emerald-500" />
+            <Copy v-else data-icon="inline-start" />
+            {{ fallbackCopied ? 'Copied' : 'Copy' }}
+          </Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

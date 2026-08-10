@@ -215,6 +215,12 @@ export interface DoorPlacementResult {
   after: PlacementStats
   improved: boolean
   evaluated: number
+  /** Human-readable summary of why the chosen spot won. */
+  reason: string
+  /** Sill height the search started from — windows only (sill axis searched). */
+  fromSillHeight?: number
+  /** Best sill height found — windows only (may equal fromSillHeight). */
+  sillHeight?: number
 }
 
 export interface PlacementOptions extends DoorwayOptions {
@@ -226,6 +232,8 @@ export interface PlacementOptions extends DoorwayOptions {
   increment: number
   /** Other doors to keep clear of. */
   otherDoors?: DoorSpec[]
+  /** Window-only second axis: sill search half-band, working units. 0/omitted = bearing only. */
+  sillSearchHalfWidth?: number
 }
 
 export function emptyDoorwayCut(): DoorwayCut {
@@ -1153,11 +1161,38 @@ function placementStats(
     riserHeight: opts.riserHeight,
   })
   const info = cut.doors[0]
+  const shape: OpeningShapeKind = spec.shape ?? 'rect'
+  const effH = effectiveHeight(shape, spec.width, spec.height)
+
+  // A placement that doesn't fit is placement-dependent once a sill axis is
+  // in play — never let the search prefer it.
+  if (!info.fits) {
+    return {
+      trimmed: info.trimmedStrutCount,
+      removed: info.removedStrutCount,
+      hubsRemoved: info.removedHubCount,
+      distinctTrims: 0,
+      shortPieces: 0,
+      centerOffset: spec.width / 2,
+      score: Number.POSITIVE_INFINITY,
+    }
+  }
+
   const distinct = new Set(
     cut.trimmed.map((t) => Math.round(t.length / Math.max(opts.increment, 1e-9))),
   )
   const shortLimit = opts.minStubLength * 2
   const shortPieces = cut.trimmed.filter((t) => t.length < shortLimit).length
+
+  const stats: PlacementStats = {
+    trimmed: info.trimmedStrutCount,
+    removed: info.removedStrutCount,
+    hubsRemoved: info.removedHubCount,
+    distinctTrims: distinct.size,
+    shortPieces,
+    centerOffset: spec.width / 2,
+    score: 0,
+  }
 
   // How far the door's center plane is from the nearest hub or strut
   // midpoint in the zone above/around the opening.
@@ -1167,15 +1202,63 @@ function placementStats(
   const z0 = model.cutZ * radius
   // Zone heights are shell-relative: shift a floor-referenced sill down by the riser.
   const sillZone = Math.max(0, (spec.sillHeight ?? 0) - (opts.riserHeight ?? 0))
-  const effH = effectiveHeight(spec.shape ?? 'rect', spec.width, spec.height)
+
+  const zeroCut =
+    (shape === 'circle' || shape === 'triangle') &&
+    stats.trimmed + stats.removed + stats.hubsRemoved === 0
+
+  if (zeroCut) {
+    // No struts touched: sort zero-cut spots by pattern-centeredness instead
+    // — distance from the shape's true center to the nearest hub or panel
+    // (face) centroid in the zone.
+    const hCenter = sillZone + effH / 2
+    const inZoneCenter = (x: number, y: number, z: number) => {
+      const u = ux * x + uy * y
+      const t = -uy * x + ux * y
+      const h = z - z0
+      return u > radius * 0.4 &&
+        h >= sillZone - effH * 0.25 &&
+        h <= sillZone + effH * 1.25 &&
+        Math.abs(t) <= spec.width
+        ? Math.hypot(t, h - hCenter)
+        : Infinity
+    }
+    let centerOffset = spec.width / 2
+    for (const v of model.vertices) {
+      centerOffset = Math.min(
+        centerOffset,
+        inZoneCenter(v.position[0] * radius, v.position[1] * radius, v.position[2] * radius),
+      )
+    }
+    for (const f of model.faces) {
+      const c = f.vertexIds.reduce<[number, number, number]>(
+        (s, vi) => {
+          const p = model.vertices[vi].position
+          return [s[0] + p[0] / 3, s[1] + p[1] / 3, s[2] + p[2] / 3]
+        },
+        [0, 0, 0],
+      )
+      centerOffset = Math.min(
+        centerOffset,
+        inZoneCenter(c[0] * radius, c[1] * radius, c[2] * radius),
+      )
+    }
+    stats.centerOffset = centerOffset
+    stats.score = 0.5 * (centerOffset / (spec.width / 2))
+    return stats
+  }
+
+  // rect (byte-for-byte the legacy formula, since effH === spec.height for
+  // rect) / arch (zone raised to sit over the arch's rounded crown) /
+  // circle-or-triangle-with-cuts (rect formula + a flat penalty so a clean
+  // zero-cut spot always outranks one that still touches structure).
+  const zoneLow = shape === 'arch' ? sillZone + 0.6 * effH : sillZone - effH * 0.25
+  const zoneHigh = shape === 'arch' ? sillZone + 1.25 * effH : sillZone + effH * 1.25
   const inZone = (x: number, y: number, z: number) => {
     const u = ux * x + uy * y
     const t = -uy * x + ux * y
     const h = z - z0
-    return u > radius * 0.4 &&
-      h >= sillZone - effH * 0.25 &&
-      h <= sillZone + effH * 1.25 &&
-      Math.abs(t) <= spec.width
+    return u > radius * 0.4 && h >= zoneLow && h <= zoneHigh && Math.abs(t) <= spec.width
       ? Math.abs(t)
       : Infinity
   }
@@ -1199,15 +1282,7 @@ function placementStats(
     )
   }
 
-  const stats: PlacementStats = {
-    trimmed: info.trimmedStrutCount,
-    removed: info.removedStrutCount,
-    hubsRemoved: info.removedHubCount,
-    distinctTrims: distinct.size,
-    shortPieces,
-    centerOffset,
-    score: 0,
-  }
+  stats.centerOffset = centerOffset
   stats.score =
     stats.hubsRemoved * 10 +
     stats.trimmed * 3 +
@@ -1215,12 +1290,25 @@ function placementStats(
     stats.shortPieces * 2 +
     stats.removed * 0.25 +
     (centerOffset / (spec.width / 2)) * 5
+  if (shape === 'circle' || shape === 'triangle') stats.score += 8
   return stats
 }
 
+/** Fixed coarse azimuth step, degrees — a fine grid over the full ±36°
+ * default window is wasteful; the coarse pass finds the right neighborhood,
+ * the fine pass (below) refines it. */
+const COARSE_STEP_DEG = 2
+/** Fixed fine-pass half-width, degrees — independent of the configured
+ * search half-width; the fine pass only polishes the coarse winner. */
+const FINE_HALF_WIDTH_DEG = 2
+
 /**
- * Find the bearing near the door's current position where the doorway meets
- * the frame most cleanly. Ties resolve to the bearing closest to where the
+ * Find the bearing (and, for windows with a sill search band, the sill
+ * height) near the door's current position where the doorway meets the
+ * frame most cleanly. A coarse 2° grid locates the right neighborhood, then
+ * a fine grid at the caller's step polishes it — a flat 0.25° sweep over
+ * ±36° (and, for windows, a matching band of sill heights) is too slow to
+ * run on every placement. Ties resolve to the position closest to where the
  * user put the door.
  */
 export function optimizeDoorPlacement(
@@ -1230,43 +1318,130 @@ export function optimizeDoorPlacement(
   opts: PlacementOptions,
 ): DoorPlacementResult {
   const halfWidth = opts.searchHalfWidthDeg ?? 36
-  const step = opts.stepDeg ?? 0.25
+  const fineStepAz = opts.stepDeg ?? 0.25
+  const shape: OpeningShapeKind = spec.shape ?? 'rect'
+  const originalAz = spec.azimuthDeg
+  const originalSill = spec.sillHeight ?? 0
+  const band = opts.sillSearchHalfWidth ?? 0
+  const useSillAxis = band > 0 && originalSill > 0
+  const sillFloor = Math.max(1e-6, (opts.riserHeight ?? 0) + (spec.margin ?? 0) + 0.001)
+  const coarseStepSill = band / 12
+  const fineStepSill = band / 50
+
   const before = placementStats(model, spec, radius, opts)
 
   const rBase = Math.sqrt(Math.max(0, 1 - model.cutZ * model.cutZ)) * radius
   const clearanceDeg = (otherWidth: number) =>
     (Math.asin(Math.min(1, (spec.width / 2 + otherWidth / 2) / rBase)) * 180) / Math.PI + 5
-  const blocked = (az: number) =>
-    (opts.otherDoors ?? []).some((d) => {
-      let delta = Math.abs(az - d.azimuthDeg) % 360
+  const myMargin = spec.margin ?? 0
+  const otherBands = (opts.otherDoors ?? []).map((d) => {
+    const dMargin = d.margin ?? 0
+    const dBottom = d.sillHeight ?? 0
+    const dTop = dBottom + effectiveHeight(d.shape ?? 'rect', d.width, d.height)
+    return { az: d.azimuthDeg, width: d.width, lo: dBottom - dMargin, hi: dTop + dMargin }
+  })
+  // Angular overlap (existing clearanceDeg + its 5° pad) AND vertical band
+  // overlap [myBottom − margin, myTop + margin] vs the other opening's own
+  // margined band. Doors start at 0 (no sillHeight set), so this naturally
+  // reduces to the door-only angular check the legacy sweep used.
+  const blocked = (az: number, sill: number): boolean => {
+    const lo = sill - myMargin
+    const hi = sill + effectiveHeight(shape, spec.width, spec.height) + myMargin
+    return otherBands.some((d) => {
+      let delta = Math.abs(az - d.az) % 360
       if (delta > 180) delta = 360 - delta
-      return delta < clearanceDeg(d.width)
+      return delta < clearanceDeg(d.width) && lo < d.hi && d.lo < hi
     })
+  }
 
-  let best = { azimuthDeg: spec.azimuthDeg, stats: before, distance: 0 }
+  const azWrap = (az: number) => (((az % 360) + 360) % 360)
+  // Normalized squared distance from the user's original placement — the
+  // tie-break when two candidates score identically.
+  const metricOf = (az: number, sill: number): number => {
+    let dAz = (az - originalAz) % 360
+    if (dAz > 180) dAz -= 360
+    if (dAz < -180) dAz += 360
+    const azTerm = (dAz / halfWidth) ** 2
+    const sillTerm = useSillAxis ? ((sill - originalSill) / band) ** 2 : 0
+    return azTerm + sillTerm
+  }
+
+  interface Candidate {
+    az: number
+    sill: number
+    stats: PlacementStats
+    metric: number
+  }
+  let best: Candidate = { az: originalAz, sill: originalSill, stats: before, metric: 0 }
   let evaluated = 1
-  const n = Math.round(halfWidth / step)
-  for (let i = -n; i <= n; i++) {
-    if (i === 0) continue
-    const az = (((spec.azimuthDeg + i * step) % 360) + 360) % 360
-    if (blocked(az)) continue
-    const stats = placementStats(model, { ...spec, azimuthDeg: az }, radius, opts)
+
+  const consider = (az: number, sill: number) => {
+    if (useSillAxis && sill < sillFloor) return
+    if (blocked(az, sill)) return
+    const candidateSpec = useSillAxis ? { ...spec, azimuthDeg: az, sillHeight: sill } : { ...spec, azimuthDeg: az }
+    const stats = placementStats(model, candidateSpec, radius, opts)
     evaluated++
-    const distance = Math.abs(i * step)
+    const metric = metricOf(az, sill)
     if (
       stats.score < best.stats.score - 1e-9 ||
-      (Math.abs(stats.score - best.stats.score) <= 1e-9 && distance < best.distance)
+      (Math.abs(stats.score - best.stats.score) <= 1e-9 && metric < best.metric)
     ) {
-      best = { azimuthDeg: az, stats, distance }
+      best = { az, sill, stats, metric }
     }
   }
 
-  return {
-    fromAzimuthDeg: spec.azimuthDeg,
-    azimuthDeg: Math.round(best.azimuthDeg * 4) / 4,
+  // ---- Coarse pass: 2° azimuth grid over ±halfWidth, crossed with a
+  // band/12 sill grid over ±band for windows with a sill search band. ----
+  const nAzCoarse = Math.round(halfWidth / COARSE_STEP_DEG)
+  const sillCoarseOffsets = useSillAxis
+    ? Array.from({ length: 25 }, (_, k) => (k - 12) * coarseStepSill)
+    : [0]
+  for (let i = -nAzCoarse; i <= nAzCoarse; i++) {
+    const az = azWrap(originalAz + i * COARSE_STEP_DEG)
+    for (const sillOffset of sillCoarseOffsets) {
+      if (i === 0 && sillOffset === 0) continue
+      consider(az, originalSill + sillOffset)
+    }
+  }
+  const coarseBestAz = best.az
+  const coarseBestSill = best.sill
+
+  // ---- Fine pass: stepDeg azimuth grid over ±2° and band/50 sill grid over
+  // ±band/12, centered on the coarse winner. ----
+  const nAzFine = Math.round(FINE_HALF_WIDTH_DEG / fineStepAz)
+  const nSillFine = useSillAxis ? Math.round(coarseStepSill / fineStepSill) : 0
+  const sillFineOffsets = useSillAxis
+    ? Array.from({ length: nSillFine * 2 + 1 }, (_, k) => (k - nSillFine) * fineStepSill)
+    : [0]
+  for (let i = -nAzFine; i <= nAzFine; i++) {
+    const az = azWrap(coarseBestAz + i * fineStepAz)
+    for (const sillOffset of sillFineOffsets) {
+      if (i === 0 && sillOffset === 0) continue
+      consider(az, coarseBestSill + sillOffset)
+    }
+  }
+
+  const zeroCutReason = best.stats.trimmed + best.stats.removed === 0 && (shape === 'circle' || shape === 'triangle')
+  const reason = zeroCutReason
+    ? 'fits inside one panel — 0 struts cut'
+    : best.stats.centerOffset <= spec.width * 0.1
+      ? 'centered on the frame pattern'
+      : `cleanest available — ${best.stats.trimmed} trims`
+
+  const result: DoorPlacementResult = {
+    fromAzimuthDeg: originalAz,
+    azimuthDeg: Math.round(best.az * 4) / 4,
     before,
     after: best.stats,
     improved: best.stats.score < before.score - 1e-9,
     evaluated,
+    reason,
   }
+  if (useSillAxis) {
+    result.fromSillHeight = originalSill
+    // Round to the fine sill-step grid, anchored at the floor so rounding
+    // can never push the result back under it.
+    result.sillHeight = Math.round((best.sill - sillFloor) / fineStepSill) * fineStepSill + sillFloor
+  }
+  return result
 }

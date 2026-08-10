@@ -538,7 +538,10 @@ describe('parametric doorways', () => {
 
     const result = optimizeDoorPlacement(dome, spec, R, opts)
     expect(result.after.score).toBeLessThanOrEqual(result.before.score)
-    expect(result.evaluated).toBeGreaterThan(100)
+    // Coarse-to-fine (Task 4): 1 (before) + 36 (coarse, 2° over ±36°) +
+    // 16 (fine, 0.25° over ±2°) = 53 — far fewer than the old flat 0.25°
+    // sweep over ±36° (289), but still enough to find a real improvement.
+    expect(result.evaluated).toBe(53)
     // The bad spot removes hubs; the optimizer should not do worse.
     expect(result.after.hubsRemoved).toBeLessThanOrEqual(result.before.hubsRemoved)
 
@@ -1222,7 +1225,10 @@ describe('portals on a zome', () => {
     const cut = cutDoorways(m, [win], radius, { minStubLength: 6 })
     expect(cut.doors[0].fits).toBe(true)
     const placed = optimizeDoorPlacement(m, win, radius, { minStubLength: 6, increment: 1 / 8 })
-    expect(placed.evaluated).toBeGreaterThan(100)
+    // No sillSearchHalfWidth here, so only the azimuth axis is searched:
+    // coarse-to-fine (Task 4) evaluates 1 + 36 + 16 = 53 (see the door test
+    // above for the breakdown), versus the old flat sweep's 289.
+    expect(placed.evaluated).toBe(53)
     expect(placed.after.score).toBeLessThanOrEqual(placed.before.score + 1e-9)
   })
 })

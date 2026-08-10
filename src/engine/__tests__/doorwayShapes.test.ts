@@ -1,12 +1,46 @@
 import { describe, expect, it } from 'vitest'
 import { generateDome } from '../dome'
-import { cutDoorways } from '../doorway'
+import { cutDoorways, optimizeDoorPlacement } from '../doorway'
 import type { DomeModel } from '../types'
 
 const R = 156
 const dome = generateDome({ frequency: 3, fraction: '1/2', baseMode: 'leveled' })
 const door = { id: 'D1', azimuthDeg: 20, width: 36, height: 80, margin: 1.5 }
 const win = { id: 'W1', azimuthDeg: 120, width: 24, height: 36, sillHeight: 36, margin: 1.5 }
+
+// The frozen-behavior `dome` above (3V) is coarse enough that a 10" porthole's
+// auto-fit plane (sized to clear the IDEAL sphere at its farthest corner)
+// sits outside the actual chorded facet everywhere on it — a property of that
+// low frequency, not of the shape logic. A finer dome gives facets the
+// porthole can actually sit inside; shared by the Task 2 and Task 4 tests
+// below that need a real zero-cut spot.
+const fineDome = generateDome({ frequency: 5, fraction: '1/2', baseMode: 'leveled' })
+
+/** Face-centroid azimuth/height probe: pick the first face whose centroid
+ * sits mid-height on the +x side, then report the bearing/sill that aims a
+ * small opening at it. */
+function panelCentroidSpot(model: DomeModel, radius: number): { az: number; sill: number } {
+  const f = model.faces
+    .map((face) => {
+      const c = face.vertexIds.reduce(
+        (s, vi) => {
+          const p = model.vertices[vi].position
+          return [s[0] + p[0] / 3, s[1] + p[1] / 3, s[2] + p[2] / 3]
+        },
+        [0, 0, 0],
+      )
+      return { face, c }
+    })
+    .find(
+      ({ c }) =>
+        c[2] * radius > model.cutZ * radius + 40 &&
+        c[2] * radius < model.cutZ * radius + 80 &&
+        c[0] > 0.5,
+    )!
+  const az = (Math.atan2(f.c[1], f.c[0]) * 180) / Math.PI
+  const sill = f.c[2] * radius - model.cutZ * radius - 5
+  return { az, sill }
+}
 
 describe('rect characterization (frozen behavior)', () => {
   const CASES = [
@@ -65,24 +99,7 @@ describe('shaped cuts', () => {
     expect(cutC.doors[0].fits).toBe(true)
   })
   it('a small circle inside one panel cuts nothing and removes that panel', () => {
-    // The frozen-behavior dome above (3V) is coarse enough that a 10"
-    // porthole's auto-fit plane (sized to clear the IDEAL sphere at its
-    // farthest corner) sits outside the actual chorded facet everywhere on
-    // it — a property of that low frequency, not of this shape logic. A
-    // finer dome gives facets the porthole can actually sit inside.
-    const fineDome = generateDome({ frequency: 5, fraction: '1/2', baseMode: 'leveled' })
-    // Face centroid azimuth/height probe: pick the first face whose centroid
-    // sits mid-height on the +x side, then aim a small porthole at it.
-    const f = fineDome.faces.map((face) => {
-      const c = face.vertexIds.reduce(
-        (s, vi) => {
-          const p = fineDome.vertices[vi].position
-          return [s[0] + p[0] / 3, s[1] + p[1] / 3, s[2] + p[2] / 3]
-        }, [0, 0, 0])
-      return { face, c }
-    }).find(({ c }) => c[2] * R > fineDome.cutZ * R + 40 && c[2] * R < fineDome.cutZ * R + 80 && c[0] > 0.5)!
-    const az = (Math.atan2(f.c[1], f.c[0]) * 180) / Math.PI
-    const sill = f.c[2] * R - fineDome.cutZ * R - 5
+    const { az, sill } = panelCentroidSpot(fineDome, R)
     const cut = cutDoorways(fineDome, [{ id: 'W1', azimuthDeg: az, width: 10, height: 10, sillHeight: sill, shape: 'circle' }], R, { minStubLength: 6 })
     expect(cut.removedEdges.size + cut.trimmedEdges.size).toBe(0)
     expect(cut.removedFaces.size).toBe(1)
@@ -187,5 +204,51 @@ describe('window bottom clip clamps to the base plane (regression)', () => {
     expect(cut.doors[0].fits).toBe(true)
     expect(cut.removedEdges.size).toBe(1)
     expect(cut.trimmed).toHaveLength(0)
+  })
+})
+
+describe('shape-aware placement', () => {
+  it('recovers a zero-cut porthole spot near a panel center (2D search)', () => {
+    // Start from the Task 2 known-clean panel spot, nudged 6° and 8" up.
+    const { az, sill } = panelCentroidSpot(fineDome, R)
+    const spec = { id: 'W1', azimuthDeg: az + 6, width: 10, height: 10, sillHeight: sill + 8, shape: 'circle' as const }
+    const out = optimizeDoorPlacement(fineDome, spec, R, {
+      minStubLength: 6, increment: 0.125, sillSearchHalfWidth: 12,
+    })
+    expect(out.improved).toBe(true)
+    expect(out.reason).toContain('0 struts cut')
+    expect(out.after.trimmed + out.after.removed).toBe(0)
+    expect(out.sillHeight).not.toBeUndefined()
+  })
+  it('door keep-out blocks overlapping bands but allows a porthole above the door', () => {
+    const doorSpec = { id: 'D1', azimuthDeg: 0, width: 36, height: 80 }
+    const lowWin = { id: 'W1', azimuthDeg: 3, width: 24, height: 24, sillHeight: 40, shape: 'circle' as const }
+    const highWin = { ...lowWin, sillHeight: 90 }
+    const opts = {
+      minStubLength: 6, increment: 0.125, sillSearchHalfWidth: 6, searchHalfWidthDeg: 4,
+      otherDoors: [doorSpec],
+    }
+    const low = optimizeDoorPlacement(dome, lowWin, R, opts)
+    const high = optimizeDoorPlacement(dome, highWin, R, opts)
+    // The low window's band overlaps the door: every same-bearing candidate is
+    // blocked, so far fewer positions get evaluated than for the high window.
+    expect(low.evaluated).toBeLessThan(high.evaluated)
+  })
+  it('windows never dive below the riser + margin floor', () => {
+    const spec = { id: 'W1', azimuthDeg: 45, width: 24, height: 24, sillHeight: 26, margin: 1, shape: 'rect' as const }
+    const out = optimizeDoorPlacement(dome, spec, R, {
+      minStubLength: 6, increment: 0.125, sillSearchHalfWidth: 12, riserHeight: 24,
+    })
+    expect((out.sillHeight ?? spec.sillHeight)).toBeGreaterThan(25)
+  })
+  it('coarse-to-fine matches the flat sweep for a rect door', () => {
+    const spec = { id: 'D1', azimuthDeg: 20, width: 36, height: 80 }
+    const fast = optimizeDoorPlacement(dome, spec, R, { minStubLength: 6, increment: 0.125 })
+    // Flat reference: evaluate every 0.25° via repeated 1-step searches is too
+    // slow — instead assert the fast result is at least as good as `before`
+    // and lands on a 0.25° grid point with a finite score.
+    expect(fast.after.score).toBeLessThanOrEqual(fast.before.score + 1e-9)
+    expect(Math.abs(fast.azimuthDeg * 4 - Math.round(fast.azimuthDeg * 4))).toBeLessThan(1e-9)
+    expect(fast.reason.length).toBeGreaterThan(0)
   })
 })

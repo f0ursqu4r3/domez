@@ -20,6 +20,7 @@ const {
   doorway,
   riser,
   workingRiserHeight,
+  loadsResult,
 } = useDomeProject()
 
 const container = ref<HTMLDivElement | null>(null)
@@ -59,7 +60,7 @@ function rebuildDome() {
     mode: state.viewMode,
     explode: state.explode,
     selection: state.selection,
-    strutSection: state.trueSize ? strutSectionWorking.value : undefined,
+    strutSection: state.trueSize && state.viewMode !== 'loads' ? strutSectionWorking.value : undefined,
     openings: state.openings,
     highlightFaces,
     doorway: doorway.value,
@@ -68,6 +69,10 @@ function rebuildDome() {
     riser: riser.value,
     jointId: state.jointId,
     endOffset: workingEndOffset.value,
+    loads:
+      state.viewMode === 'loads' && loadsResult.value.ok
+        ? loadsResult.value.members.map((m) => ({ forceN: m.forceN, utilization: m.utilization }))
+        : undefined,
   })
   scene.add(domeGroup)
 }
@@ -297,6 +302,7 @@ watch(
     riser.value,
     state.jointId,
     workingEndOffset.value,
+    loadsResult.value,
   ],
   () => rebuildDome(),
   { deep: true },

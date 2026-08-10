@@ -43,6 +43,17 @@ export interface BuildOptions {
   jointId?: JointMethodId
   /** Material removed per strut end, working units (drives hub/plate gaps). */
   endOffset?: number
+  /** Loads-view per-strut force + utilization, edge-indexed (index === edgeId). */
+  loads?: { forceN: number; utilization: number }[]
+}
+
+/** Loads-view strut color: tension → blue, compression → red, over → magenta. */
+export function loadColor(forceN: number, utilization: number): THREE.Color {
+  if (utilization > 1) return new THREE.Color(0xd946ef)
+  const t = Math.min(Math.max(utilization, 0), 1)
+  const base = new THREE.Color(0x6b7280)
+  const target = new THREE.Color(forceN >= 0 ? 0x3b82f6 : 0xef4444)
+  return base.lerp(target, t)
 }
 
 export interface DomePickMaps {
@@ -378,8 +389,9 @@ export function buildDomeGroup(
         group.add(mesh)
         continue
       }
+      const loadsMode = opts.mode === 'loads' && opts.loads !== undefined
       const mat = new THREE.MeshStandardMaterial({
-        color: new THREE.Color(strutColor(t.id)),
+        color: loadsMode ? 0xffffff : new THREE.Color(strutColor(t.id)),
         roughness: isRect ? 0.8 : 0.55,
         metalness: isRect ? 0.05 : 0.25,
       })
@@ -397,7 +409,11 @@ export function buildDomeGroup(
         mesh.setMatrixAt(i, m)
         mesh.setColorAt(
           i,
-          eid === selEdge ? new THREE.Color('#ffffff') : new THREE.Color(strutColor(t.id)),
+          eid === selEdge
+            ? new THREE.Color('#ffffff')
+            : loadsMode
+              ? loadColor(opts.loads![eid].forceN, opts.loads![eid].utilization)
+              : new THREE.Color(strutColor(t.id)),
         )
         map.push(eid)
       })
@@ -887,7 +903,8 @@ export function buildDomeGroup(
   }
 
   // ---- Panels, one mesh per opening kind so each gets its own material ----
-  if (showPanels) {
+  // Skipped entirely in loads mode: utilization colors must not be obscured.
+  if (showPanels && opts.mode !== 'loads') {
     const openings = opts.openings ?? {}
     const highlighted = new Set(opts.highlightFaces ?? [])
     const surface = opts.mode === 'surface'

@@ -13,6 +13,7 @@ const modes: { value: ViewMode; label: string }[] = [
   { value: 'frame', label: 'Frame' },
   { value: 'surface', label: 'Surface' },
   { value: 'exploded', label: 'Exploded' },
+  { value: 'loads', label: 'Loads' },
 ]
 
 const trueSizeTitle = computed(() => `Dimensionally accurate struts — ${material.value.profile}`)

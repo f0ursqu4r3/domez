@@ -37,6 +37,9 @@ export async function decodeShare(payload: string): Promise<ProjectSettings | nu
     if (!payload.startsWith(PREFIX)) return null
     const packed = fromBase64Url(payload.slice(PREFIX.length))
     const bytes = await pipe(packed, new DecompressionStream('deflate-raw'))
+    // deflate-bomb guard: 256 KiB is two orders of magnitude above any real
+    // project — reject before JSON.parse ever sees an absurd string.
+    if (bytes.byteLength > 262144) return null
     const parsed: unknown = JSON.parse(new TextDecoder().decode(bytes))
     if (
       typeof parsed !== 'object' ||

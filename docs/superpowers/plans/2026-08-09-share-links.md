@@ -221,6 +221,16 @@ if (typeof window !== 'undefined' && window.location.hash.length > 1) {
 }
 ```
 
+**Amended (post-review, user request):** the `window.confirm(...)` above was
+replaced with a shadcn Dialog. The returning-user branch now sets a
+`pendingShare` ref instead of blocking on `confirm`; a new
+`applyPendingShare(accept: boolean)` function (called by the dialog's two
+actions) applies-and-clears or just clears. The `history.replaceState` call
+was also moved into a `finally` immediately after decode resolves — covering
+every outcome, including a throw during apply — rather than sitting at the
+end of the `.then` body. The snippet above documents the original shape;
+see `src/composables/useDomeProject.ts` for the current implementation.
+
 (`loadProjectFile` is a hoisted function declaration — callable here. The `{app:'domez', settings}` envelope is exactly what `parseProjectJson` validates.)
 
 - [ ] **Step 3: Export** `shareLink` and `copyShareLink` from the composable's return object.

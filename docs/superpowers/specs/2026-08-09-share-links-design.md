@@ -16,8 +16,14 @@ visitors, behind a confirm for returning users — then clears the hash.
    in the Build tab's Project group.
 2. Open flow: fresh visitor (no `domez-project-v1` in localStorage)
    applies instantly; returning user gets
-   `window.confirm('Load shared project? Your current project will be replaced.')`.
+   ~~`window.confirm('Load shared project? Your current project will be replaced.')`~~.
+   **Amended:** Reversed at user request post-review: a shadcn Dialog
+   (Load shared project? / Keep my project) replaces the native confirm;
+   hash cleared immediately at decode time.
 3. Hash cleared via `history.replaceState` after apply AND after decline.
+   **Amended:** Reversed at user request post-review: a shadcn Dialog
+   (Load shared project? / Keep my project) replaces the native confirm;
+   hash cleared immediately at decode time.
 
 ## Encoding: `src/lib/share.ts`
 
@@ -50,13 +56,24 @@ export async function decodeShare(payload: string): Promise<ProjectSettings | nu
   settings:
   - fresh visitor (no `localStorage['domez-project-v1']` at the moment
     the app booted) → apply immediately;
-  - returning user → `window.confirm(...)`; apply only on OK.
+  - ~~returning user → `window.confirm(...)`; apply only on OK.~~
+    **Amended:** Reversed at user request post-review: a shadcn Dialog
+    (Load shared project? / Keep my project) replaces the native confirm;
+    the decoded settings are held in a `pendingShare` ref (not the hash —
+    that is cleared immediately, see below) and the dialog's two actions
+    call `applyPendingShare(accept)`, which applies-and-clears or just
+    clears.
   - Apply path reuses the existing `loadProjectFile` restore logic (wrap
     the settings in whatever envelope `loadProjectFile` validates, or
     call the shared internal restore directly — implementer picks after
     reading `loadProjectFile`; behavior must equal loading the same
     settings as a project file).
-  - In every outcome (applied, declined, invalid) the hash is cleared:
+  - ~~In every outcome (applied, declined, invalid) the hash is cleared:~~
+    **Amended:** the hash is cleared immediately once decode resolves —
+    not deferred to the dialog decision — since the settings are kept in
+    memory (`pendingShare`) from that point on and the hash is never
+    needed again. Wrapped in try/finally so a throw during apply still
+    clears it:
     `history.replaceState(null, '', location.pathname + location.search)`.
 - Exposed from the composable: `shareLink` (the Build-tab exporter and
   header button both use it).

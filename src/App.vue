@@ -4,6 +4,14 @@ import { RotateCcw, Share2, Check } from '@lucide/vue'
 import { useDomeProject } from '@/composables/useDomeProject'
 import { formatLength } from '@/engine/units'
 import { Button } from '@/components/ui/button'
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+  DialogFooter,
+} from '@/components/ui/dialog'
 import DomeViewer from '@/components/DomeViewer.vue'
 import ViewModeBar from '@/components/ViewModeBar.vue'
 import StrutLegend from '@/components/StrutLegend.vue'
@@ -18,7 +26,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { ScrollArea } from '@/components/ui/scroll-area'
 
 const project = useDomeProject()
-const { state, summary, cutList, diameter, loadsResult } = project
+const { state, summary, cutList, diameter, loadsResult, pendingShare } = project
 
 function onReset() {
   if (window.confirm('Reset everything to defaults? Doors, openings, and settings will be cleared.')) {
@@ -27,10 +35,12 @@ function onReset() {
 }
 
 const copied = ref(false)
+let copiedTimer: ReturnType<typeof setTimeout> | undefined
 async function onShare() {
   if (await project.copyShareLink()) {
     copied.value = true
-    setTimeout(() => (copied.value = false), 1500)
+    clearTimeout(copiedTimer)
+    copiedTimer = setTimeout(() => (copied.value = false), 1500)
   }
 }
 
@@ -204,5 +214,21 @@ const chips = computed(() => [
         </Tabs>
       </aside>
     </div>
+
+    <Dialog :open="!!pendingShare" @update:open="(v: boolean) => !v && project.applyPendingShare(false)">
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Load shared project?</DialogTitle>
+          <DialogDescription>
+            Someone shared a dome project with you. Loading it will replace your current
+            project — export yours first if you want to keep it.
+          </DialogDescription>
+        </DialogHeader>
+        <DialogFooter>
+          <Button variant="outline" @click="project.applyPendingShare(false)">Keep my project</Button>
+          <Button @click="project.applyPendingShare(true)">Load shared project</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   </div>
 </template>

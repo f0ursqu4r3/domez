@@ -48,4 +48,18 @@ describe('share link codec', () => {
     const notSettings = await encodeShare({ hello: 'world' } as unknown as ProjectSettings)
     expect(await decodeShare(notSettings)).toBeNull()
   })
+
+  it('accepts out-of-range numeric fields at the codec layer — the codec only checks shape; clamping untrusted values (frequency, diameter, etc.) is the composable\'s job at apply time', async () => {
+    const wild = { ...SETTINGS, frequency: 200 } as unknown as ProjectSettings
+    const payload = await encodeShare(wild)
+    const back = await decodeShare(payload)
+    expect(back).not.toBeNull()
+    expect(back?.frequency).toBe(200)
+  })
+
+  it('rejects a payload that inflates past the 256 KiB cap (deflate-bomb guard)', async () => {
+    const bomb = { ...SETTINGS, notes: 'x'.repeat(300_000) } as unknown as ProjectSettings
+    const payload = await encodeShare(bomb)
+    expect(await decodeShare(payload)).toBeNull()
+  })
 })

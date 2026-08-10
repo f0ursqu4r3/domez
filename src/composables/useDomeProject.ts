@@ -1,4 +1,4 @@
-import { computed, reactive, watch } from 'vue'
+import { computed, reactive, ref, watch } from 'vue'
 import { generateDome } from '@/engine/dome'
 import { buildCutList, JOINT_METHODS, type JointMethodId } from '@/engine/cutlist'
 import { packCuts, type StockLength } from '@/engine/packing'
@@ -41,7 +41,7 @@ import { panelPatternsSvg } from '@/engine/exports/patterns'
 import { domeObj } from '@/engine/exports/obj'
 import { fabricationSvg, hubLabelsSvg } from '@/engine/exports/svg'
 import { fabricationDxf } from '@/engine/exports/dxf'
-import { projectJson, parseProjectJson } from '@/engine/exports/json'
+import { projectJson, parseProjectJson, type ProjectSettings } from '@/engine/exports/json'
 import { encodeShare, decodeShare } from '@/lib/share'
 
 export type ViewMode = 'assembly' | 'frame' | 'surface' | 'exploded' | 'loads'
@@ -974,9 +974,19 @@ function titleOf() {
 function loadProjectFile(text: string): boolean {
   const settings = parseProjectJson(text)
   if (!settings) return false
-  state.units = settings.units as UnitSystem
-  state.frequency = settings.frequency as Frequency
-  state.fraction = settings.fraction as Fraction
+  // Both import paths (file + share link) land here — settings may be
+  // attacker-controlled (a crafted share URL), so the dangerous numeric
+  // and identity fields are whitelisted exactly like restorePersisted,
+  // leaving the current value in place on anything out of range.
+  if (settings.units === 'imperial' || settings.units === 'metric') state.units = settings.units
+  if (
+    Number.isInteger(settings.frequency) &&
+    settings.frequency >= 1 &&
+    settings.frequency <= 6
+  )
+    state.frequency = settings.frequency as Frequency
+  if (['3/8', '1/2', '5/8'].includes(settings.fraction as string))
+    state.fraction = settings.fraction as Fraction
   state.baseMode = (settings.baseMode as 'natural' | 'leveled') ?? 'natural'
   state.mode =
     settings.mode === 'zome' ? 'zome' : settings.mode === 'goldberg' ? 'goldberg' : 'geodesic'
@@ -990,15 +1000,22 @@ function loadProjectFile(text: string): boolean {
     state.zomePitchDeg = settings.zomePitchDeg
   if (typeof settings.zomeRows === 'number' && settings.zomeRows >= 1)
     state.zomeRows = Math.max(1, Math.min(state.zomeSides - 2, Math.round(settings.zomeRows)))
-  state.materialId = settings.material
+  if (MATERIALS.some((m) => m.id === settings.material)) state.materialId = settings.material
   // Sync watchers fire on units/materialId/jointId; set explicit values
   // after them (jointId before endOffset, or the joint-default reset would
   // clobber the loaded offset). The file stores display units; the setters
   // store canonical mm.
-  state.jointId = settings.jointMethod as JointMethodId
-  diameter.value = settings.diameter
-  endOffset.value = settings.endOffset
-  kerf.value = settings.kerf
+  if (JOINT_METHODS.some((j) => j.id === settings.jointMethod))
+    state.jointId = settings.jointMethod as JointMethodId
+  if (
+    Number.isFinite(settings.diameter) &&
+    settings.diameter > 0 &&
+    settings.diameter <= 1000
+  )
+    diameter.value = settings.diameter
+  if (Number.isFinite(settings.endOffset) && settings.endOffset >= 0)
+    endOffset.value = settings.endOffset
+  if (Number.isFinite(settings.kerf) && settings.kerf >= 0) kerf.value = settings.kerf
   state.increment = settings.increment
   state.riserHeightMm =
     typeof settings.riserHeightMm === 'number' && settings.riserHeightMm >= 0
@@ -1038,7 +1055,7 @@ function loadProjectFile(text: string): boolean {
     }
   }
   state.openings = openings
-  state.doors = (settings.doors ?? [])
+  state.doors = (Array.isArray(settings.doors) ? settings.doors : [])
     .filter(
       (d) =>
         typeof d?.azimuthDeg === 'number' &&
@@ -1054,7 +1071,7 @@ function loadProjectFile(text: string): boolean {
       depthMm: typeof d.depthMm === 'number' ? d.depthMm : 0,
       marginMm: typeof d.marginMm === 'number' && d.marginMm > 0 ? d.marginMm : 0,
     }))
-  state.framedWindows = (settings.windows ?? [])
+  state.framedWindows = (Array.isArray(settings.windows) ? settings.windows : [])
     .filter(
       (w) =>
         typeof w?.azimuthDeg === 'number' &&
@@ -1277,17 +1294,38 @@ const hadStoredProject =
 
 restorePersisted()
 
+/** A decoded share-link payload awaiting the returning-user's decision
+ * (shown as a dialog by App.vue). Null when there is nothing pending. */
+const pendingShare = ref<ProjectSettings | null>(null)
+
+/** Resolve a pending share-link prompt: apply the settings when accepted,
+ * discard them either way. Called by the dialog's two actions. */
+function applyPendingShare(accept: boolean) {
+  if (accept && pendingShare.value) {
+    loadProjectFile(JSON.stringify({ app: 'domez', settings: pendingShare.value }))
+  }
+  pendingShare.value = null
+}
+
 // Shared-project links: #p1:<payload> applies the encoded settings —
-// instantly for fresh visitors, behind a confirm for returning users.
+// instantly for fresh visitors, or queued behind a dialog (pendingShare)
+// for returning users. The hash is single-use — its settings live in
+// pendingShare/loadProjectFile from here on — so it is cleared as soon as
+// decode resolves, in a finally covering every outcome (applied, queued,
+// invalid, or a throw partway through apply).
 if (typeof window !== 'undefined' && window.location.hash.length > 1) {
   void decodeShare(window.location.hash.slice(1)).then((settings) => {
-    if (settings) {
-      const apply =
-        !hadStoredProject ||
-        window.confirm('Load shared project? Your current project will be replaced.')
-      if (apply) loadProjectFile(JSON.stringify({ app: 'domez', settings }))
+    try {
+      if (settings) {
+        if (!hadStoredProject) {
+          loadProjectFile(JSON.stringify({ app: 'domez', settings }))
+        } else {
+          pendingShare.value = settings
+        }
+      }
+    } finally {
+      window.history.replaceState(null, '', window.location.pathname + window.location.search)
     }
-    window.history.replaceState(null, '', window.location.pathname + window.location.search)
   })
 }
 
@@ -1401,6 +1439,8 @@ export function useDomeProject() {
     loadProjectFile,
     shareLink,
     copyShareLink,
+    pendingShare,
+    applyPendingShare,
     titleOf,
   }
 }

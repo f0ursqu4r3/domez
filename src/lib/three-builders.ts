@@ -487,25 +487,104 @@ export function buildDomeGroup(
       const bLo = door.buckBottomRel
       const bHi = door.buckTopRel
       const sillH = door.sillHeight ?? 0
-      addMember(
-        base.clone().addScaledVector(tv, half).setY(z0 + (bLo + bHi) / 2),
-        memberW, bHi - bLo, memberD,
-      )
-      addMember(
-        base.clone().addScaledVector(tv, -half).setY(z0 + (bLo + bHi) / 2),
-        memberW, bHi - bLo, memberD,
-      )
-      // Header across the top, spanning the rough opening plus both jambs.
-      addMember(
-        base.clone().setY(z0 + bHi + memberW / 2),
-        door.width + 2 * memberW, memberW, memberD,
-      )
-      // Window sill member under the opening.
-      if (sillH > 0) {
+      const worldUp = new THREE.Vector3(0, 1, 0)
+      // Door-local (radial, tangential, height above base) -> world. Shared
+      // by the shaped buck path and both closure blocks below.
+      const P = (ur: number, t: number, h: number) =>
+        u.clone().multiplyScalar(ur).addScaledVector(tv, t).setY(z0 + h)
+      // Framing bar geometry/material and joint bookkeeping, shared between
+      // the rect closure bars and the shaped tunnel bars (a door only ever
+      // takes one of those two paths, so there's no cross-talk).
+      const jointPts: THREE.Vector3[] = []
+      const barGeo = new THREE.BoxGeometry(1, 1, 1)
+      const barMat = new THREE.MeshStandardMaterial({
+        color: 0xc9873a,
+        roughness: 0.6,
+        metalness: 0.1,
+      })
+      const addBar = (a: THREE.Vector3, b: THREE.Vector3) => {
+        const dir = b.clone().sub(a)
+        const len = dir.length()
+        if (len < 1e-6) return
+        const bar = new THREE.Mesh(barGeo, barMat)
+        const yAxis = dir.clone().normalize()
+        // Any perpendicular works for a square section.
+        const ref = Math.abs(yAxis.y) > 0.9 ? new THREE.Vector3(1, 0, 0) : new THREE.Vector3(0, 1, 0)
+        const xAxis = new THREE.Vector3().crossVectors(yAxis, ref).normalize()
+        const zAxis = new THREE.Vector3().crossVectors(xAxis, yAxis)
+        const mtx = new THREE.Matrix4().makeBasis(
+          xAxis.multiplyScalar(memberW),
+          yAxis.multiplyScalar(len),
+          zAxis.multiplyScalar(Math.min(memberD, memberW * 1.5)),
+        )
+        mtx.setPosition(a.clone().add(b).multiplyScalar(0.5))
+        bar.applyMatrix4(mtx)
+        bar.name = `door-framing-${door.id}`
+        group.add(bar)
+        jointPts.push(a, b)
+      }
+
+      if (door.shape === 'rect' || !door.shape) {
         addMember(
-          base.clone().setY(z0 + bLo - memberW / 2),
+          base.clone().addScaledVector(tv, half).setY(z0 + (bLo + bHi) / 2),
+          memberW, bHi - bLo, memberD,
+        )
+        addMember(
+          base.clone().addScaledVector(tv, -half).setY(z0 + (bLo + bHi) / 2),
+          memberW, bHi - bLo, memberD,
+        )
+        // Header across the top, spanning the rough opening plus both jambs.
+        addMember(
+          base.clone().setY(z0 + bHi + memberW / 2),
           door.width + 2 * memberW, memberW, memberD,
         )
+        // Window sill member under the opening.
+        if (sillH > 0) {
+          addMember(
+            base.clone().setY(z0 + bLo - memberW / 2),
+            door.width + 2 * memberW, memberW, memberD,
+          )
+        }
+      } else {
+        // Shaped buck: one box member per outline edge, centered on the edge
+        // midpoint at the frame plane. Skip the flat bottom edge for
+        // floor-standing doors — the opening continues down through the
+        // riser/floor there, same rule the rect path uses (no sill member
+        // when sillH === 0).
+        const outline = door.outline
+        const n = outline.length
+        for (let i = 0; i < n; i++) {
+          const [t0, h0] = outline[i]
+          const [t1, h1] = outline[(i + 1) % n]
+          if (
+            sillH === 0 &&
+            Math.abs(h0 - door.buckBottomRel) < 1e-6 &&
+            Math.abs(h1 - door.buckBottomRel) < 1e-6
+          )
+            continue
+          const dt = t1 - t0
+          const dh = h1 - h0
+          const edgeLen = Math.hypot(dt, dh)
+          if (edgeLen < 1e-9) continue
+          const dirT = dt / edgeLen
+          const dirH = dh / edgeLen
+          // In-plane edge direction and its in-plane perpendicular — tv and
+          // worldUp are orthonormal, so any unit combination of them is too
+          // (the buck plane contains both, since it's radial-normal).
+          const xDir = tv.clone().multiplyScalar(dirT).add(worldUp.clone().multiplyScalar(dirH))
+          const yDir = tv.clone().multiplyScalar(-dirH).add(worldUp.clone().multiplyScalar(dirT))
+          const center = P(door.framePlaneDist, (t0 + t1) / 2, (h0 + h1) / 2)
+          const mesh = new THREE.Mesh(boxGeo, mat)
+          const mtx = new THREE.Matrix4().makeBasis(
+            xDir.multiplyScalar(edgeLen),
+            yDir.multiplyScalar(memberW),
+            u.clone().multiplyScalar(memberD),
+          )
+          mtx.setPosition(center)
+          mesh.applyMatrix4(mtx)
+          mesh.name = `door-${door.id}`
+          group.add(mesh)
+        }
       }
 
       // ---- Extruded-entry closure, following the faceted shell ----
@@ -513,9 +592,6 @@ export function buildDomeGroup(
       if (opts.closeDoorways !== false && profile) {
         const halfEnv = profile.halfWidth
         const positions: number[] = []
-        // Door-local (radial, tangential, height above base) -> world.
-        const P = (ur: number, t: number, h: number) =>
-          u.clone().multiplyScalar(ur).addScaledVector(tv, t).setY(z0 + h)
         const quad = (a: THREE.Vector3, b: THREE.Vector3, c: THREE.Vector3, d: THREE.Vector3) => {
           positions.push(a.x, a.y, a.z, b.x, b.y, b.z, c.x, c.y, c.z)
           positions.push(a.x, a.y, a.z, c.x, c.y, c.z, d.x, d.y, d.z)
@@ -608,35 +684,8 @@ export function buildDomeGroup(
                 m.part.startsWith('sill') ? profile.lowHeight : profile.topHeight,
               )
             : P(e[0], m.side * halfEnv, e[1])
-        const jointPts: THREE.Vector3[] = []
-        const barGeo = new THREE.BoxGeometry(1, 1, 1)
-        const barMat = new THREE.MeshStandardMaterial({
-          color: 0xc9873a,
-          roughness: 0.6,
-          metalness: 0.1,
-        })
         for (const member of door.closureFraming) {
-          const a = memberWorld(member, member.a)
-          const b = memberWorld(member, member.b)
-          const dir = b.clone().sub(a)
-          const len = dir.length()
-          if (len < 1e-6) continue
-          const bar = new THREE.Mesh(barGeo, barMat)
-          const yAxis = dir.clone().normalize()
-          // Any perpendicular works for a square section.
-          const ref = Math.abs(yAxis.y) > 0.9 ? new THREE.Vector3(1, 0, 0) : new THREE.Vector3(0, 1, 0)
-          const xAxis = new THREE.Vector3().crossVectors(yAxis, ref).normalize()
-          const zAxis = new THREE.Vector3().crossVectors(xAxis, yAxis)
-          const mtx = new THREE.Matrix4().makeBasis(
-            xAxis.multiplyScalar(memberW),
-            yAxis.multiplyScalar(len),
-            zAxis.multiplyScalar(Math.min(memberD, memberW * 1.5)),
-          )
-          mtx.setPosition(a.clone().add(b).multiplyScalar(0.5))
-          bar.applyMatrix4(mtx)
-          bar.name = `door-framing-${door.id}`
-          group.add(bar)
-          jointPts.push(a, b)
+          addBar(memberWorld(member, member.a), memberWorld(member, member.b))
         }
         // Buck corners are junctions too.
         jointPts.push(P(door.framePlaneDist, -half, bLo), P(door.framePlaneDist, half, bLo))
@@ -644,24 +693,88 @@ export function buildDomeGroup(
           P(door.framePlaneDist, -half, bHi),
           P(door.framePlaneDist, half, bHi),
         )
-        // Connector nodes at unique junctions.
-        const seen = new Set<string>()
-        const jointGeo = new THREE.SphereGeometry(1, 10, 8)
-        const jointMat = new THREE.MeshStandardMaterial({
-          color: 0xd8dee9,
-          roughness: 0.4,
-          metalness: 0.55,
-        })
-        for (const p of jointPts) {
-          const key = `${Math.round(p.x * 2)}:${Math.round(p.y * 2)}:${Math.round(p.z * 2)}`
-          if (seen.has(key)) continue
-          seen.add(key)
-          const joint = new THREE.Mesh(jointGeo, jointMat)
-          joint.scale.setScalar(Math.max(memberW * 0.7, radius * 0.004))
-          joint.position.copy(p)
-          joint.name = `door-joint-${door.id}`
-          group.add(joint)
+      }
+
+      // ---- Shaped-opening tunnel closure: quads between consecutive
+      // stations of each margined-polygon-edge strip, plus the same stick
+      // framing/joint treatment as the rect path above. ----
+      if (opts.closeDoorways !== false && door.closureTunnel) {
+        const d = door.framePlaneDist
+        const positions: number[] = []
+        const quad = (a: THREE.Vector3, b: THREE.Vector3, c: THREE.Vector3, dd: THREE.Vector3) => {
+          positions.push(a.x, a.y, a.z, b.x, b.y, b.z, c.x, c.y, c.z)
+          positions.push(a.x, a.y, a.z, c.x, c.y, c.z, dd.x, dd.y, dd.z)
         }
+        for (const strip of door.closureTunnel) {
+          const stations = strip.uShell.length
+          const stationPt = (s: number): [number, number] => [
+            strip.a[0] + ((strip.b[0] - strip.a[0]) * s) / (stations - 1),
+            strip.a[1] + ((strip.b[1] - strip.a[1]) * s) / (stations - 1),
+          ]
+          for (let s = 0; s < stations - 1; s++) {
+            const us = strip.uShell[s]
+            const us1 = strip.uShell[s + 1]
+            if (Math.abs(us - d) < 1e-6 && Math.abs(us1 - d) < 1e-6) continue
+            const [t0, h0] = stationPt(s)
+            const [t1, h1] = stationPt(s + 1)
+            quad(
+              P(Math.min(d, us), t0, h0),
+              P(Math.max(d, us), t0, h0),
+              P(Math.max(d, us1), t1, h1),
+              P(Math.min(d, us1), t1, h1),
+            )
+          }
+        }
+        if (positions.length > 0) {
+          const closureGeo = new THREE.BufferGeometry()
+          closureGeo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3))
+          closureGeo.computeVertexNormals()
+          const closure = new THREE.Mesh(
+            closureGeo,
+            new THREE.MeshStandardMaterial({
+              color: 0xc9873a,
+              roughness: 0.75,
+              metalness: 0.05,
+              transparent: opts.mode !== 'surface',
+              opacity: opts.mode === 'surface' ? 1 : 0.5,
+              side: THREE.DoubleSide,
+              depthWrite: opts.mode === 'surface',
+            }),
+          )
+          closure.name = `door-closure-${door.id}`
+          group.add(closure)
+        }
+
+        // Shaped closure framing: the same stick-framing loop as the rect
+        // path, but endpoints resolve via ua/ub (the radial extent, carried
+        // separately from the door-local a/b since shaped members use it
+        // for tangential+height rather than side-plane offsets).
+        for (const member of door.closureFraming) {
+          addBar(
+            P(member.ua ?? d, member.a[0], member.a[1]),
+            P(member.ub ?? d, member.b[0], member.b[1]),
+          )
+        }
+      }
+
+      // Connector nodes at unique junctions (rect buck corners + framing
+      // ends, or shaped framing ends — whichever branch above ran).
+      const seen = new Set<string>()
+      const jointGeo = new THREE.SphereGeometry(1, 10, 8)
+      const jointMat = new THREE.MeshStandardMaterial({
+        color: 0xd8dee9,
+        roughness: 0.4,
+        metalness: 0.55,
+      })
+      for (const p of jointPts) {
+        const key = `${Math.round(p.x * 2)}:${Math.round(p.y * 2)}:${Math.round(p.z * 2)}`
+        if (seen.has(key)) continue
+        seen.add(key)
+        const joint = new THREE.Mesh(jointGeo, jointMat)
+        joint.scale.setScalar(Math.max(memberW * 0.7, radius * 0.004))
+        joint.position.copy(p)
+        joint.name = `door-joint-${door.id}`
+        group.add(joint)
       }
     }
   }

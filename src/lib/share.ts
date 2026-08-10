@@ -7,7 +7,7 @@ async function pipe(
   bytes: Uint8Array,
   transform: CompressionStream | DecompressionStream,
 ): Promise<Uint8Array> {
-  const stream = new Blob([bytes]).stream().pipeThrough(transform)
+  const stream = new Blob([bytes.slice()]).stream().pipeThrough(transform)
   return new Uint8Array(await new Response(stream).arrayBuffer())
 }
 

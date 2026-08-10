@@ -181,6 +181,44 @@ describe('panel frames', () => {
     expect(svg).toContain('sill')
   })
 
+  it('frameJigsSvg: sill annotation carries the boundary member\'s own bevel (regression — 1V leveled equilateral panel with a sill edge)', () => {
+    // 1V leveled: base-touching panels are equilateral (all edges the same
+    // length, all corners 60°), so the boundary/sill edge is geometrically
+    // indistinguishable from the interior edges — only its bevel and
+    // boundary flag differ. Matching must not clump every instance of the
+    // first-seen member before assigning the odd one out to a different
+    // member entirely; the sill label has to travel with the boundary
+    // member's own bevel value, and every edge's data-bevel must still
+    // reconcile with the plan's declared member counts.
+    const m = generateDome({ frequency: 1, fraction: '1/2', baseMode: 'leveled' })
+    const plan = buildPanelFrames(m, 156, 'imperial', NO_DOOR)
+    const type = plan.types.find((t) => t.members.some((mm) => mm.boundary))
+    expect(type).toBeDefined()
+    const boundaryMember = type!.members.find((mm) => mm.boundary)!
+
+    const svg = frameJigsSvg(plan, 'imperial', 'DOMEZ test')
+    const pageIdx = plan.types.indexOf(type!) + 1
+    const pageStart = svg.indexOf(`data-frame-page="${pageIdx}"`)
+    const nextStart = svg.indexOf(`data-frame-page="${pageIdx + 1}"`)
+    const page = svg.slice(pageStart, nextStart === -1 ? svg.length : nextStart)
+
+    // Multiset check: the page's per-edge data-bevel values, weighted by
+    // count, match the type's declared member bevels exactly.
+    const bevels = [...page.matchAll(/data-bevel="([\d.]+)"/g)].map((mtc) => mtc[1]).sort()
+    const expected = type!.members
+      .flatMap((mm) => Array(mm.count).fill(mm.bevelDeg.toFixed(1)))
+      .sort()
+    expect(bevels).toEqual(expected)
+
+    // The edge annotated (sill) must carry the boundary member's own bevel
+    // value — built from the plan, not a hardcoded number — not any other
+    // member's bevel.
+    const sillText = `bevel ${boundaryMember.bevelDeg.toFixed(1)}° (sill)`
+    expect(page).toContain(sillText)
+    const sillOccurrences = page.split('(sill)').length - 1
+    expect(sillOccurrences).toBe(boundaryMember.count)
+  })
+
   it('optimizeDiameter with doors + framed-panel scores per-candidate doorway topology', () => {
     const m = generateDome({ frequency: 3, fraction: '1/2', baseMode: 'leveled' })
     const result = optimizeDiameter(m, {

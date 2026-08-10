@@ -1,7 +1,102 @@
-import type { FrameMemberSpec, PanelFramePlan } from '../panelFrames'
+import type { FrameMemberSpec, FrameType, PanelFramePlan } from '../panelFrames'
 import type { UnitSystem } from '../types'
 import { formatLength } from '../units'
 import { PAPER, esc } from './paper'
+
+const LEN_EPS = 1e-4
+const ANGLE_EPS = 0.05
+
+/**
+ * Assign each outline edge (index 0..sides-1) the `FrameMemberSpec` it is
+ * cut from. `FrameType.members` is deduped across the panel (one entry per
+ * distinct long-point/miter/bevel/boundary combination, with a `count`) —
+ * it does not retain which physical edge each instance came from. Geometry
+ * alone (long-point length + the sorted pair of half-corner miters at its
+ * two ends) is usually enough to place a member exactly; edges are grouped
+ * into geometric-equivalence buckets on that basis.
+ *
+ * Where a bucket's geometry matches more than one member — a shape whose
+ * edges are all the same length and corner angles but differ only in
+ * bevel/boundary (e.g. an equilateral panel with one boundary/sill edge
+ * among otherwise-identical interior edges) — bevel and boundary are not
+ * recoverable from the outline at all, so there is no way to tell exactly
+ * which slot the odd one out belongs in. Rather than clustering every
+ * instance of the first-seen member before touching the next (which reads
+ * as a plausible but wrong physical layout), instances are spread across
+ * the bucket's slots via weighted round robin — the same "most overdue
+ * slot" scheduling used for evenly interleaving multiple counts around a
+ * cycle. For a lone odd-one-out among identical siblings this places it at
+ * the most-separated slot, matching how these shapes are actually built.
+ */
+function assignMembersToEdges(t: FrameType): FrameMemberSpec[] {
+  const nV = t.sides
+  const edgeGeom = Array.from({ length: nV }, (_, i) => {
+    const p = t.outline[i]
+    const q = t.outline[(i + 1) % nV]
+    const len = Math.hypot(q[0] - p[0], q[1] - p[1])
+    const ms = t.cornerAnglesDeg[i] / 2
+    const me = t.cornerAnglesDeg[(i + 1) % nV] / 2
+    return ms <= me ? { len, a: ms, b: me } : { len, a: me, b: ms }
+  })
+
+  interface Bucket {
+    idxs: number[]
+    geom: { len: number; a: number; b: number }
+  }
+  const buckets: Bucket[] = []
+  edgeGeom.forEach((g, i) => {
+    const bucket = buckets.find(
+      (b) =>
+        Math.abs(b.geom.len - g.len) < LEN_EPS * Math.max(1, g.len) &&
+        Math.abs(b.geom.a - g.a) < ANGLE_EPS &&
+        Math.abs(b.geom.b - g.b) < ANGLE_EPS,
+    )
+    if (bucket) bucket.idxs.push(i)
+    else buckets.push({ idxs: [i], geom: g })
+  })
+
+  const result: FrameMemberSpec[] = new Array(nV)
+  for (const bucket of buckets) {
+    const matches = t.members.filter(
+      (mm) =>
+        Math.abs(mm.longPointLength - bucket.geom.len) < LEN_EPS * Math.max(1, bucket.geom.len) &&
+        Math.abs(mm.miterStartDeg - bucket.geom.a) < ANGLE_EPS &&
+        Math.abs(mm.miterEndDeg - bucket.geom.b) < ANGLE_EPS,
+    )
+    if (matches.length === 0) {
+      // Should never happen — the plan's members are built from exactly
+      // this outline's edges. Fall back rather than crash the drawing.
+      console.warn('frameJigsSvg: no member spec matches outline edge geometry', t.label, bucket)
+      for (const i of bucket.idxs) result[i] = t.members[0]
+      continue
+    }
+    if (matches.length === 1) {
+      for (const i of bucket.idxs) result[i] = matches[0]
+      continue
+    }
+    // Ambiguous bucket: distribute the matching members' counts across its
+    // slots by weighted round robin (pick, at each slot, whichever member
+    // is furthest behind its fair share).
+    const n = bucket.idxs.length
+    const assigned = matches.map(() => 0)
+    for (let k = 0; k < n; k++) {
+      let bestJ = -1
+      let bestScore = -Infinity
+      matches.forEach((mm, j) => {
+        if (assigned[j] >= mm.count) return
+        const score = mm.count * (k + 1) - assigned[j] * n
+        if (score > bestScore) {
+          bestScore = score
+          bestJ = j
+        }
+      })
+      if (bestJ === -1) bestJ = 0
+      assigned[bestJ]++
+      result[bucket.idxs[k]] = matches[bestJ]
+    }
+  }
+  return result
+}
 
 /**
  * Printable build jigs for framed-panel domes: one page per distinct panel
@@ -82,33 +177,13 @@ export function frameJigsSvg(plan: PanelFramePlan, units: UnitSystem, title: str
       push(`<circle class="vtx" cx="${p[0]}" cy="${p[1]}" r="${fs * 0.16}"/>`)
     }
 
-    // ---- Per-edge member assignment: match each outline edge (by its
-    // exact long-point length + sorted miter pair, same values the plan
-    // was built from) against the deduped member-spec pool. ----
-    const pool = t.members.map((mm) => ({ ...mm, remaining: mm.count }))
-    const pickMember = (len: number, a: number, b: number): FrameMemberSpec => {
-      const cand = pool.find(
-        (mm) =>
-          mm.remaining > 0 &&
-          Math.abs(mm.longPointLength - len) < 1e-4 * Math.max(1, len) &&
-          Math.abs(mm.miterStartDeg - a) < 0.05 &&
-          Math.abs(mm.miterEndDeg - b) < 0.05,
-      )
-      if (cand) {
-        cand.remaining--
-        return cand
-      }
-      return t.members[0]
-    }
+    // ---- Per-edge member assignment (see assignMembersToEdges) ----
+    const memberByEdge = assignMembersToEdges(t)
 
     for (let i = 0; i < nV; i++) {
       const p = pts[i]
       const q = pts[(i + 1) % nV]
-      const len = Math.hypot(q[0] - p[0], q[1] - p[1]) / s
-      const ms = t.cornerAnglesDeg[i] / 2
-      const me = t.cornerAnglesDeg[(i + 1) % nV] / 2
-      const [a, b] = ms <= me ? [ms, me] : [me, ms]
-      const member = pickMember(len, a, b)
+      const member = memberByEdge[i]
 
       const ex = q[0] - p[0]
       const ey = q[1] - p[1]

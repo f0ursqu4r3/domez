@@ -12,6 +12,62 @@ import type { ViewMode } from '@/composables/useDomeProject'
 export const toThree = (p: readonly number[], r: number) =>
   new THREE.Vector3(p[0] * r, p[2] * r, -p[1] * r)
 
+/** Clip a convex solid (list of convex polygon faces) by the half-space
+ * (x − p0)·n ≥ 0, sealing the cut with a cap face. Shared by every
+ * joint-accurate rendering path that builds boxes via boolean intersection
+ * of half-spaces (mitered struts, framed-panel members). */
+function clipSolid(
+  faces: THREE.Vector3[][],
+  p0: THREE.Vector3,
+  n: THREE.Vector3,
+  eps: number,
+): THREE.Vector3[][] {
+  const out: THREE.Vector3[][] = []
+  const capPts: THREE.Vector3[] = []
+  for (const poly of faces) {
+    const d = poly.map((pt) => pt.clone().sub(p0).dot(n))
+    if (d.every((v) => v >= -eps)) {
+      out.push(poly)
+      continue
+    }
+    if (d.every((v) => v <= eps)) continue
+    const np: THREE.Vector3[] = []
+    for (let i = 0; i < poly.length; i++) {
+      const j = (i + 1) % poly.length
+      if (d[i] >= -eps) np.push(poly[i])
+      if ((d[i] > eps && d[j] < -eps) || (d[i] < -eps && d[j] > eps)) {
+        const ip = poly[i].clone().lerp(poly[j], d[i] / (d[i] - d[j]))
+        np.push(ip)
+        capPts.push(ip)
+      }
+    }
+    if (np.length >= 3) out.push(np)
+  }
+  if (capPts.length >= 3) {
+    const c = capPts
+      .reduce((acc, pt) => acc.add(pt), new THREE.Vector3())
+      .multiplyScalar(1 / capPts.length)
+    const ref = Math.abs(n.x) < 0.9 ? new THREE.Vector3(1, 0, 0) : new THREE.Vector3(0, 1, 0)
+    const e1 = new THREE.Vector3().crossVectors(n, ref).normalize()
+    const e2 = new THREE.Vector3().crossVectors(n, e1)
+    const sorted = capPts
+      .map((pt) => {
+        const rel = pt.clone().sub(c)
+        return { pt, a: Math.atan2(rel.dot(e2), rel.dot(e1)) }
+      })
+      .sort((x, y) => x.a - y.a)
+      .map((x) => x.pt)
+    const cap: THREE.Vector3[] = []
+    for (const pt of sorted) {
+      if (cap.length === 0 || cap[cap.length - 1].distanceToSquared(pt) > eps * eps) {
+        cap.push(pt)
+      }
+    }
+    if (cap.length >= 3) out.push(cap)
+  }
+  return out
+}
+
 export interface BuildOptions {
   mode: ViewMode
   /** 0..1, only used in exploded mode. */
@@ -132,6 +188,9 @@ export function buildDomeGroup(
   })
   const bevelStruts = jointMode && opts.jointId === 'timber-plate' && section?.kind === 'rect'
   const miterStruts = jointMode && opts.jointId === 'mitered' && section?.kind === 'rect'
+  // Framed-panel: no hubs/struts/plates — every panel is its own doubled
+  // mitered frame, rendered per-panel/per-edge below instead of per-strut.
+  const framedPanel = jointMode && opts.jointId === 'framed-panel'
   // Per-vertex fan of incident strut directions (three-space), for the
   // neighbor seam planes of the mitered joint.
   const fans = miterStruts
@@ -208,7 +267,7 @@ export function buildDomeGroup(
       dir.normalize()
       return [a.clone().addScaledVector(dir, pull), b.clone().addScaledVector(dir, -pull)] as const
     }
-    for (const t of model.strutTypes) {
+    if (!framedPanel) for (const t of model.strutTypes) {
       const keptEdges = t.edgeIds.filter((eid) => !cutEdges.has(eid))
       if (keptEdges.length === 0) continue
       if ((bevelStruts || miterStruts) && section && section.kind === 'rect') {
@@ -229,61 +288,6 @@ export function buildDomeGroup(
             faceMap.push(eid)
           }
         }
-        /** Clip a convex solid (list of convex polygon faces) by the
-         * half-space (x − p0)·n ≥ 0, sealing the cut with a cap face. */
-        const clipSolid = (
-          faces: THREE.Vector3[][],
-          p0: THREE.Vector3,
-          n: THREE.Vector3,
-          eps: number,
-        ): THREE.Vector3[][] => {
-          const out: THREE.Vector3[][] = []
-          const capPts: THREE.Vector3[] = []
-          for (const poly of faces) {
-            const d = poly.map((pt) => pt.clone().sub(p0).dot(n))
-            if (d.every((v) => v >= -eps)) {
-              out.push(poly)
-              continue
-            }
-            if (d.every((v) => v <= eps)) continue
-            const np: THREE.Vector3[] = []
-            for (let i = 0; i < poly.length; i++) {
-              const j = (i + 1) % poly.length
-              if (d[i] >= -eps) np.push(poly[i])
-              if ((d[i] > eps && d[j] < -eps) || (d[i] < -eps && d[j] > eps)) {
-                const ip = poly[i].clone().lerp(poly[j], d[i] / (d[i] - d[j]))
-                np.push(ip)
-                capPts.push(ip)
-              }
-            }
-            if (np.length >= 3) out.push(np)
-          }
-          if (capPts.length >= 3) {
-            const c = capPts
-              .reduce((acc, pt) => acc.add(pt), new THREE.Vector3())
-              .multiplyScalar(1 / capPts.length)
-            const ref =
-              Math.abs(n.x) < 0.9 ? new THREE.Vector3(1, 0, 0) : new THREE.Vector3(0, 1, 0)
-            const e1 = new THREE.Vector3().crossVectors(n, ref).normalize()
-            const e2 = new THREE.Vector3().crossVectors(n, e1)
-            const sorted = capPts
-              .map((pt) => {
-                const rel = pt.clone().sub(c)
-                return { pt, a: Math.atan2(rel.dot(e2), rel.dot(e1)) }
-              })
-              .sort((x, y) => x.a - y.a)
-              .map((x) => x.pt)
-            const cap: THREE.Vector3[] = []
-            for (const pt of sorted) {
-              if (cap.length === 0 || cap[cap.length - 1].distanceToSquared(pt) > eps * eps) {
-                cap.push(pt)
-              }
-            }
-            if (cap.length >= 3) out.push(cap)
-          }
-          return out
-        }
-
         for (const eid of keptEdges) {
           const e = model.edges[eid]
           const a3 = toThree(model.vertices[e.v0].position, radius)
@@ -662,8 +666,216 @@ export function buildDomeGroup(
     }
   }
 
+  // ---- Framed-panel members: doubled seams via convex clipping ----
+  // Panel units mirror the ring-building logic in engine/panelFrames.ts
+  // (buildPanelFrames) — duplicated here because that function returns a
+  // cut-list plan (jig types), not per-panel world geometry. Keep the two
+  // in sync by hand if the panelization rule ever changes.
+  if (showStruts && framedPanel && section) {
+    let panelUnits: { ring: number[]; faceIds: number[] }[]
+    if (model.polys) {
+      panelUnits = model.polys.map((p) => ({ ring: [...p.vertexIds], faceIds: [...p.faceIds] }))
+    } else if (model.rhombi) {
+      panelUnits = model.rhombi.map((r) => ({ ring: [...r.vertexIds], faceIds: [...r.faceIds] }))
+      const covered = new Set(model.rhombi.flatMap((r) => r.faceIds))
+      for (const f of model.faces) {
+        if (!covered.has(f.id)) panelUnits.push({ ring: [...f.vertexIds], faceIds: [f.id] })
+      }
+    } else {
+      panelUnits = model.faces.map((f) => ({ ring: [...f.vertexIds], faceIds: [f.id] }))
+    }
+    const kept = panelUnits.filter(
+      (u) => !u.faceIds.some((fid) => opts.doorway?.removedFaces.has(fid)),
+    )
+
+    const edgeByKey = new Map<string, number>()
+    model.edges.forEach((e) =>
+      edgeByKey.set(`${Math.min(e.v0, e.v1)}:${Math.max(e.v0, e.v1)}`, e.id),
+    )
+    const baseZ = model.vertices.filter((v) => v.isBase).map((v) => v.position[2])
+    const leveledBase = baseZ.length > 0 && Math.max(...baseZ) - Math.min(...baseZ) < 1e-6
+
+    // Pass 1: per-panel outward normal + centroid, and — per model edge id —
+    // the outward normal of every KEPT panel touching it (length 1 on a
+    // boundary edge, or an interior edge with one side omitted by a
+    // doorway; length 2 on a normal interior seam).
+    const panelGeoms = kept.map((u) => {
+      const pts3 = u.ring.map((vid) => toThree(model.vertices[vid].position, radius))
+      let nx = 0
+      let ny = 0
+      let nz = 0
+      for (let i = 0; i < pts3.length; i++) {
+        const a = pts3[i]
+        const b = pts3[(i + 1) % pts3.length]
+        nx += (a.y - b.y) * (a.z + b.z)
+        ny += (a.z - b.z) * (a.x + b.x)
+        nz += (a.x - b.x) * (a.y + b.y)
+      }
+      const normal = new THREE.Vector3(nx, ny, nz).normalize()
+      const centroid = pts3
+        .reduce((s, p) => s.add(p), new THREE.Vector3())
+        .multiplyScalar(1 / pts3.length)
+      if (normal.dot(centroid) < 0) normal.negate() // outward from the dome center (world origin)
+      return { ring: u.ring, pts3, normal, centroid }
+    })
+    const edgeNormals = new Map<number, THREE.Vector3[]>()
+    for (const g of panelGeoms) {
+      const n = g.ring.length
+      for (let i = 0; i < n; i++) {
+        const eid = edgeByKey.get(
+          `${Math.min(g.ring[i], g.ring[(i + 1) % n])}:${Math.max(g.ring[i], g.ring[(i + 1) % n])}`,
+        )
+        if (eid === undefined) continue
+        const arr = edgeNormals.get(eid)
+        if (arr) arr.push(g.normal)
+        else edgeNormals.set(eid, [g.normal])
+      }
+    }
+
+    const thickness = sectionW // rect: width; round: OD — in-plane, inward from the edge line
+    const depth = sectionD // rect: depth; round: OD — out-of-plane, inward along −normal
+    const ext = thickness * 1.5
+    const typeBuckets = new Map<number, { positions: number[]; faceMap: number[] }>()
+    const pushMember = (
+      typeId: number,
+      poly: THREE.Vector3[],
+      eid: number,
+      explode: THREE.Vector3,
+    ) => {
+      let bucket = typeBuckets.get(typeId)
+      if (!bucket) {
+        bucket = { positions: [], faceMap: [] }
+        typeBuckets.set(typeId, bucket)
+      }
+      for (let i = 2; i < poly.length; i++) {
+        for (const pt of [poly[0], poly[i - 1], poly[i]]) {
+          bucket.positions.push(pt.x + explode.x, pt.y + explode.y, pt.z + explode.z)
+        }
+        bucket.faceMap.push(eid)
+      }
+    }
+
+    // Pass 2: one member solid per kept panel per outline edge.
+    for (const g of panelGeoms) {
+      const n = g.ring.length
+      for (let i = 0; i < n; i++) {
+        const va = g.ring[i]
+        const vb = g.ring[(i + 1) % n]
+        const eid = edgeByKey.get(`${Math.min(va, vb)}:${Math.max(va, vb)}`)
+        if (eid === undefined) continue
+        const edge = model.edges[eid]
+        const a3 = g.pts3[i]
+        const b3 = g.pts3[(i + 1) % n]
+        const edgeLen = a3.distanceTo(b3)
+        if (edgeLen < 1e-9) continue
+        const eps = Math.max(edgeLen * 1e-7, Math.min(thickness, depth) * 1e-6)
+        const edgeDir = b3.clone().sub(a3).normalize()
+        const edgeMid = a3.clone().add(b3).multiplyScalar(0.5)
+        const inward = new THREE.Vector3().crossVectors(g.normal, edgeDir).normalize()
+        if (inward.dot(g.centroid.clone().sub(edgeMid)) < 0) inward.negate()
+        const explode =
+          explodeDist > 0
+            ? edgeMid.clone().normalize().multiplyScalar(explodeDist)
+            : new THREE.Vector3()
+
+        // Box cross-section: flush with the edge line and panel surface,
+        // extending `thickness` inward in-plane and `depth` inward along
+        // −normal; length extended past both corners for the miters below.
+        const corner = (pt: THREE.Vector3, uSel: 0 | 1, wSel: 0 | 1) =>
+          pt
+            .clone()
+            .addScaledVector(inward, uSel * thickness)
+            .addScaledVector(g.normal, -wSel * depth)
+        const aE = a3.clone().addScaledVector(edgeDir, -ext)
+        const bE = b3.clone().addScaledVector(edgeDir, ext)
+        const A = [corner(aE, 0, 0), corner(aE, 1, 0), corner(aE, 1, 1), corner(aE, 0, 1)]
+        const B = [corner(bE, 0, 0), corner(bE, 1, 0), corner(bE, 1, 1), corner(bE, 0, 1)]
+        let solid: THREE.Vector3[][] = [
+          [A[0], A[3], A[2], A[1]],
+          [B[0], B[1], B[2], B[3]],
+          [A[0], B[0], B[1], A[1]],
+          [A[1], B[1], B[2], A[2]],
+          [A[2], B[2], B[3], A[3]],
+          [A[3], B[3], B[0], A[0]],
+        ]
+        // Interior reference point, guaranteed inside the un-clipped solid,
+        // for orienting every half-space test below.
+        const refPt = edgeMid
+          .clone()
+          .addScaledVector(inward, thickness / 2)
+          .addScaledVector(g.normal, -depth / 2)
+
+        // (a) Corner-bisector half-spaces: this panel's own two edges meet
+        // at each corner and miter against each other, exactly like the
+        // mitered-strut fan (plane normal = own edge dir − neighbor dir).
+        const prevPt = g.pts3[(i - 1 + n) % n]
+        const nextPt = g.pts3[(i + 2) % n]
+        const cornerClip = (vertexPos: THREE.Vector3, dThis: THREE.Vector3, dOther: THREE.Vector3) => {
+          const cn = dThis.clone().sub(dOther)
+          if (cn.lengthSq() < 1e-12) return
+          cn.normalize()
+          if (refPt.clone().sub(vertexPos).dot(cn) < 0) cn.negate()
+          solid = clipSolid(solid, vertexPos, cn, eps)
+        }
+        cornerClip(a3, edgeDir, prevPt.clone().sub(a3).normalize())
+        cornerClip(b3, edgeDir.clone().negate(), nextPt.clone().sub(b3).normalize())
+
+        if (edge.faceIds.length === 2) {
+          // (b) Interior edge: seam plane through the edge line, spanned by
+          // the edge direction and the average outward normal of the (up
+          // to two) kept panels sharing it.
+          const normals = edgeNormals.get(eid) ?? [g.normal]
+          const avg = normals
+            .reduce((s, nn) => s.add(nn), new THREE.Vector3())
+            .multiplyScalar(1 / normals.length)
+          if (avg.lengthSq() > 1e-12) {
+            avg.normalize()
+            const sn = new THREE.Vector3().crossVectors(edgeDir, avg)
+            if (sn.lengthSq() > 1e-12) {
+              sn.normalize()
+              if (refPt.clone().sub(a3).dot(sn) < 0) sn.negate()
+              solid = clipSolid(solid, a3, sn, eps)
+            }
+          }
+        } else if (leveledBase) {
+          // (c) Boundary edge on a leveled base: clip to the foundation
+          // plane so the extended member doesn't poke through the floor.
+          solid = clipSolid(
+            solid,
+            new THREE.Vector3(0, model.cutZ * radius, 0),
+            new THREE.Vector3(0, 1, 0),
+            eps,
+          )
+        }
+
+        for (const poly of solid) pushMember(edge.typeId, poly, eid, explode)
+      }
+    }
+
+    for (const [typeId, bucket] of typeBuckets) {
+      if (bucket.positions.length === 0) continue
+      const bgeo = new THREE.BufferGeometry()
+      bgeo.setAttribute('position', new THREE.Float32BufferAttribute(bucket.positions, 3))
+      bgeo.computeVertexNormals()
+      const mesh = new THREE.Mesh(
+        bgeo,
+        new THREE.MeshStandardMaterial({
+          color: new THREE.Color(strutColor(typeId)),
+          roughness: 0.8,
+          metalness: 0.05,
+          side: THREE.DoubleSide,
+        }),
+      )
+      mesh.name = `frame-members-${typeId}`
+      pick.strutFaceMaps.set(mesh, bucket.faceMap)
+      group.add(mesh)
+    }
+  }
+
   // ---- Hubs ----
-  if (showStruts) {
+  // Framed-panel has no hub hardware at all — every joint is a doubled seam
+  // of panel-frame members, bolted directly to its neighbor.
+  if (showStruts && !framedPanel) {
     const sphere = new THREE.SphereGeometry(1, 14, 10)
     const mat = new THREE.MeshStandardMaterial({ color: 0xd8dee9, roughness: 0.4, metalness: 0.55 })
     const keptVertices = model.vertices.filter((v) => !opts.doorway?.removedVertices.has(v.id))

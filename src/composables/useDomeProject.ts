@@ -1016,7 +1016,13 @@ function loadProjectFile(text: string): boolean {
   if (Number.isFinite(settings.endOffset) && settings.endOffset >= 0)
     endOffset.value = settings.endOffset
   if (Number.isFinite(settings.kerf) && settings.kerf >= 0) kerf.value = settings.kerf
-  state.increment = settings.increment
+  // roundToIncrement divides by this — 0 or garbage means NaN cut lengths.
+  if (
+    typeof settings.increment === 'number' &&
+    Number.isFinite(settings.increment) &&
+    settings.increment > 0
+  )
+    state.increment = settings.increment
   state.riserHeightMm =
     typeof settings.riserHeightMm === 'number' && settings.riserHeightMm >= 0
       ? settings.riserHeightMm

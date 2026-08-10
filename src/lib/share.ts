@@ -11,6 +11,37 @@ async function pipe(
   return new Uint8Array(await new Response(stream).arrayBuffer())
 }
 
+/** deflate-bomb guard: 256 KiB is two orders of magnitude above any real
+ * project. Inflation streams chunk by chunk and ABORTS past the cap, so
+ * peak memory stays bounded — a bomb never fully materializes. */
+const MAX_INFLATED_BYTES = 262144
+
+async function inflateCapped(packed: Uint8Array): Promise<Uint8Array | null> {
+  const stream = new Blob([packed.slice()])
+    .stream()
+    .pipeThrough(new DecompressionStream('deflate-raw'))
+  const reader = stream.getReader()
+  const chunks: Uint8Array[] = []
+  let total = 0
+  for (;;) {
+    const { done, value } = await reader.read()
+    if (done) break
+    total += value.byteLength
+    if (total > MAX_INFLATED_BYTES) {
+      await reader.cancel()
+      return null
+    }
+    chunks.push(value)
+  }
+  const out = new Uint8Array(total)
+  let offset = 0
+  for (const c of chunks) {
+    out.set(c, offset)
+    offset += c.byteLength
+  }
+  return out
+}
+
 function toBase64Url(bytes: Uint8Array): string {
   let bin = ''
   for (const b of bytes) bin += String.fromCharCode(b)
@@ -36,10 +67,8 @@ export async function decodeShare(payload: string): Promise<ProjectSettings | nu
   try {
     if (!payload.startsWith(PREFIX)) return null
     const packed = fromBase64Url(payload.slice(PREFIX.length))
-    const bytes = await pipe(packed, new DecompressionStream('deflate-raw'))
-    // deflate-bomb guard: 256 KiB is two orders of magnitude above any real
-    // project — reject before JSON.parse ever sees an absurd string.
-    if (bytes.byteLength > 262144) return null
+    const bytes = await inflateCapped(packed)
+    if (bytes === null) return null
     const parsed: unknown = JSON.parse(new TextDecoder().decode(bytes))
     if (
       typeof parsed !== 'object' ||

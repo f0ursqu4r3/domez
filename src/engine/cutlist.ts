@@ -190,6 +190,12 @@ export function buildCutList(
       }
     }
 
+    // Framed-panel builds site-fit the panels around each opening — the
+    // buck is the only pre-cut framing, so its notes call that out.
+    const framedBuckNote = useFramePlan
+      ? ' — rough-opening frame — panels around the opening are site-fitted'
+      : ''
+
     for (const door of doorway.doors) {
       const jamb = roundToIncrement(door.jambLength, opts.increment)
       const header = roundToIncrement(door.headerLength, opts.increment)
@@ -206,7 +212,7 @@ export function buildCutList(
           dihedralMinDeg: NaN,
           dihedralMaxDeg: NaN,
           kind: 'frame',
-          note: `${door.id} buck vertical, square cuts`,
+          note: `${door.id} buck vertical, square cuts${framedBuckNote}`,
         },
         {
           typeId: -1,
@@ -220,7 +226,7 @@ export function buildCutList(
           dihedralMinDeg: NaN,
           dihedralMaxDeg: NaN,
           kind: 'frame',
-          note: `${door.id} rough-opening span; add framing allowance for your style`,
+          note: `${door.id} rough-opening span; add framing allowance for your style${framedBuckNote}`,
         },
       )
       if ((door.sillHeight ?? 0) > 0) {
@@ -237,7 +243,7 @@ export function buildCutList(
           dihedralMinDeg: NaN,
           dihedralMaxDeg: NaN,
           kind: 'frame',
-          note: `${door.id} window sill, slope for drainage on site`,
+          note: `${door.id} window sill, slope for drainage on site${framedBuckNote}`,
         })
       }
 

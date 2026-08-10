@@ -70,7 +70,14 @@ export function assemblyGuideSvg(
     cy += fs * 1.5
   }
   cy += fs * 0.5
-  text(m, cy, 'Strut tally (cut lengths include the joint end offset):', 's')
+  text(
+    m,
+    cy,
+    opts.framedPanel
+      ? 'Member tally (long-point lengths):'
+      : 'Strut tally (cut lengths include the joint end offset):',
+    's',
+  )
   cy += fs * 1.4
   for (const r of cutList.rows.filter((r) => r.kind === 'strut' && r.quantity > 0)) {
     parts.push(
@@ -82,7 +89,9 @@ export function assemblyGuideSvg(
   cy += fs
   for (const line of [
     '1. Raise each course bottom-up: stand the risers from the ring below, then close the ring.',
-    '2. Print hub labels (Assembly tab) and tape each pattern to its plate before build day.',
+    opts.framedPanel
+      ? '2. Panels bolt to their neighbors — pre-drill seam bolt holes on the jig.'
+      : '2. Print hub labels (Assembly tab) and tape each pattern to its plate before build day.',
     '3. Trimmed (†) door/window pieces install with their bucks — see the cut list and openings.',
     ...(opts.framedPanel
       ? [

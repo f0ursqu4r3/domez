@@ -8,7 +8,7 @@ import { buildCutList } from '../cutlist'
 import { packCuts } from '../packing'
 import { buildBom } from '../bom'
 import { planPanels } from '../panels'
-import { framesCsv } from '../exports/csv'
+import { cutListCsv, framesCsv } from '../exports/csv'
 import { frameJigsSvg } from '../exports/frames'
 import { optimizeDiameter } from '../optimize'
 
@@ -261,5 +261,26 @@ describe('panel frames', () => {
     })
     expect(result.best).not.toBeNull()
     expect(Number.isFinite(result.best!.boardsNeeded)).toBe(true)
+  })
+
+  it('frameJigsSvg: natural-base 3V plan carries the square-sill scribe caveat', () => {
+    const m = generateDome({ frequency: 3, fraction: '1/2', baseMode: 'natural' })
+    const plan = buildPanelFrames(m, 156, 'imperial', NO_DOOR)
+    const svg = frameJigsSvg(plan, 'imperial', 'DOMEZ test')
+    expect(svg).toContain('scribe to grade')
+  })
+
+  it('framed cut-list CSV (3V leveled) never leaks NaN onto the page', () => {
+    const m = generateDome({ frequency: 3, fraction: '1/2', baseMode: 'leveled' })
+    const plan = buildPanelFrames(m, 156, 'imperial', NO_DOOR)
+    const cl = buildCutList(
+      m,
+      { radius: 156, increment: 1 / 8, endOffset: 0, units: 'imperial', jointId: 'framed-panel' },
+      NO_DOOR,
+      null,
+      plan,
+    )
+    const csv = cutListCsv(cl, 'imperial')
+    expect(csv.includes('NaN')).toBe(false)
   })
 })

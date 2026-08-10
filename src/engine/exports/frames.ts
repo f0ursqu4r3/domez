@@ -18,12 +18,16 @@ export function frameJigsSvg(plan: PanelFramePlan, units: UnitSystem, title: str
   const fmt = (v: number) => formatLength(v, units)
 
   const hasManySides = plan.types.some((t) => t.sides > 4)
+  const hasSquareSill = plan.types.some((t) => t.members.some((mm) => mm.boundary && mm.bevelDeg === 0))
   const footNotes = [
     units === 'imperial' ? '16″ seam-bolt spacing.' : '400 mm seam-bolt spacing.',
     'Cut members back at the miter — the small point clash where panels meet is a normal build detail.',
   ]
   if (hasManySides) {
     footNotes.push('Hex/pent outlines are near-planar approximations — jig to the drawing.')
+  }
+  if (hasSquareSill) {
+    footNotes.push('Natural base: sill members are square-cut — scribe to grade on site.')
   }
 
   const pageCount = Math.max(1, plan.types.length)

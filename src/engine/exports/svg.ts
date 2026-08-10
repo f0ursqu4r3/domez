@@ -90,7 +90,7 @@ export function fabricationSvg(
     )
     // right column: angles
     parts.push(
-      `<text x="${barX1 + 24}" y="${barY + 4}" font-size="12" fill="#333">axial ${r.axialAngleDeg.toFixed(2)}°</text>`,
+      `<text x="${barX1 + 24}" y="${barY + 4}" font-size="12" fill="#333">axial ${Number.isNaN(r.axialAngleDeg) ? '—' : `${r.axialAngleDeg.toFixed(2)}°`}</text>`,
     )
     if (!Number.isNaN(r.dihedralMinDeg)) {
       parts.push(

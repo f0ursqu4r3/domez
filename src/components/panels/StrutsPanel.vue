@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { computed } from 'vue'
 import { useDomeProject } from '@/composables/useDomeProject'
 import { formatLength } from '@/engine/units'
 import { strutColor } from '@/engine/exports/svg'
@@ -18,6 +19,12 @@ function selectType(typeId: number) {
   const first = model.value.strutTypes[typeId]?.edgeIds[0]
   if (first !== undefined) state.selection = { kind: 'strut', edgeId: first }
 }
+
+const hasSquareSill = computed(() =>
+  (framePlan.value?.types ?? []).some((t) =>
+    t.members.some((mm) => mm.boundary && mm.bevelDeg === 0),
+  ),
+)
 </script>
 
 <template>
@@ -73,6 +80,9 @@ function selectType(typeId: number) {
     <p class="text-xs text-muted-foreground leading-relaxed">
       Openings omit their panels — frame those on site. Members are long-point lengths; cut back
       at the miter.
+      <template v-if="hasSquareSill">
+        Natural base: sill members are square-cut — scribe to grade on site.
+      </template>
     </p>
   </div>
   <div v-else class="flex flex-col gap-3 p-4">

@@ -72,7 +72,16 @@ const groups = computed(() => [
         icon: PencilRuler,
         run: exporters.panelPatterns,
       },
-      { label: 'Hubs CSV', desc: 'hub schedule', icon: FileSpreadsheet, run: exporters.hubsCsv },
+      ...(state.jointId === 'framed-panel'
+        ? []
+        : [
+            {
+              label: 'Hubs CSV',
+              desc: 'hub schedule',
+              icon: FileSpreadsheet,
+              run: exporters.hubsCsv,
+            },
+          ]),
       {
         label: 'Openings CSV',
         desc: 'doors, windows, glazing',

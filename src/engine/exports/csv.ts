@@ -43,7 +43,7 @@ export function cutListCsv(cutList: CutList, units: UnitSystem): string {
         r.exactCutLength.toFixed(4),
         r.roundingError.toFixed(4),
         r.chordLength.toFixed(4),
-        r.axialAngleDeg.toFixed(2),
+        Number.isNaN(r.axialAngleDeg) ? '' : r.axialAngleDeg.toFixed(2),
         Number.isNaN(r.dihedralMinDeg)
           ? ''
           : `${r.dihedralMinDeg.toFixed(2)}–${r.dihedralMaxDeg.toFixed(2)}`,

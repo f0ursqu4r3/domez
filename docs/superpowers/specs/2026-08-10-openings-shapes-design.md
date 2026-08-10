@@ -81,8 +81,10 @@ window bottom − margin < 0 → conflict (unchanged rules, bbox-fed).
 - `outline: [number, number][]` — the pre-margin polygon (t, hRel), for
   rendering and tests.
 - `buckMembers: BuckMember[]` where
-  `BuckMember = { part: string; length: number; miterDeg: number; quantity: number }`
-  (`miterDeg` per end, symmetric; 0 = square cut). This list is the
+  `BuckMember = { part: string; length: number; miterDegA: number; miterDegB: number; quantity: number }`
+  (miter per end, degrees; 0 = square cut. Amended from a single
+  symmetric `miterDeg`: triangle rakes carry different base and apex
+  miters). This list is the
   single source for cut list / CSV / card display for ALL shapes:
   - rect door: `2× jamb` (square), `1× header` (square); rect window
     adds `1× sill`.

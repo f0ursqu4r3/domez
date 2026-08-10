@@ -30,7 +30,9 @@ const project = useDomeProject()
 const { state, summary, cutList, diameter, loadsResult, pendingShare, shareFallbackUrl } = project
 
 function onReset() {
-  if (window.confirm('Reset everything to defaults? Doors, openings, and settings will be cleared.')) {
+  if (
+    window.confirm('Reset everything to defaults? Doors, openings, and settings will be cleared.')
+  ) {
     project.resetProject()
   }
 }
@@ -117,7 +119,7 @@ const chips = computed(() => [
           geodesic dome cad
         </span>
       </div>
-      <div class="ml-auto flex items-center gap-1.5 overflow-x-auto">
+      <div class="ml-auto flex items-center gap-1.5 overflow-hidden">
         <span
           class="rounded-md border border-primary/50 bg-primary/10 px-2.5 py-1 font-mono text-xs text-primary whitespace-nowrap"
         >
@@ -239,17 +241,22 @@ const chips = computed(() => [
       </aside>
     </div>
 
-    <Dialog :open="!!pendingShare" @update:open="(v: boolean) => !v && project.applyPendingShare(false)">
+    <Dialog
+      :open="!!pendingShare"
+      @update:open="(v: boolean) => !v && project.applyPendingShare(false)"
+    >
       <DialogContent>
         <DialogHeader>
           <DialogTitle>Load shared project?</DialogTitle>
           <DialogDescription>
-            Someone shared a dome project with you. Loading it will replace your current
-            project — export yours first if you want to keep it.
+            Someone shared a dome project with you. Loading it will replace your current project —
+            export yours first if you want to keep it.
           </DialogDescription>
         </DialogHeader>
         <DialogFooter>
-          <Button variant="outline" @click="project.applyPendingShare(false)">Keep my project</Button>
+          <Button variant="outline" @click="project.applyPendingShare(false)"
+            >Keep my project</Button
+          >
           <Button @click="project.applyPendingShare(true)">Load shared project</Button>
         </DialogFooter>
       </DialogContent>

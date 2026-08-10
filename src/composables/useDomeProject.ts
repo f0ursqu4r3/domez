@@ -47,7 +47,7 @@ import { fabricationDxf } from '@/engine/exports/dxf'
 import { projectJson, parseProjectJson, type ProjectSettings } from '@/engine/exports/json'
 import { encodeShare, decodeShare } from '@/lib/share'
 
-export type ViewMode = 'assembly' | 'frame' | 'surface' | 'exploded' | 'loads'
+export type ViewMode = 'assembly' | 'frame' | 'surface' | 'exploded' | 'loads' | 'plan'
 export type Selection = { kind: 'strut'; edgeId: number } | { kind: 'hub'; vertexId: number } | null
 
 /** Real cross-section of the strut stock, canonical mm. */
@@ -1238,7 +1238,7 @@ function restorePersisted() {
         Object.entries(p.disabledStock as Record<string, unknown>).map(([k, v]) => [k, !!v]),
       )
     }
-    if (['assembly', 'frame', 'surface', 'exploded', 'loads'].includes(p.viewMode as string)) {
+    if (['assembly', 'frame', 'surface', 'exploded', 'loads', 'plan'].includes(p.viewMode as string)) {
       state.viewMode = p.viewMode as ViewMode
     }
     state.explode = num(p.explode, (n) => n >= 0 && n <= 1) ?? state.explode

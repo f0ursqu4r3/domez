@@ -32,6 +32,12 @@ let domeGroup: THREE.Group | null = null
 let groundGroup: THREE.Group | null = null
 let figureGroup: THREE.Group | null = null
 let raf = 0
+// The camera actually rendered/raycast against — the perspective camera by
+// default, swapped to planCamera while in plan view.
+let currentCamera: THREE.Camera | null = null
+let planCamera: THREE.OrthographicCamera | null = null
+let planHalfExtent = 0
+let savedView: { position: THREE.Vector3; target: THREE.Vector3 } | null = null
 let resizeObserver: ResizeObserver | null = null
 const raycaster = new THREE.Raycaster()
 const pointer = new THREE.Vector2()
@@ -101,7 +107,7 @@ function rebuildGround() {
     groundY,
     Math.max(model.value.unitBaseRadius, 0.9) * r * 1.1 + 0.2 * h,
   )
-  figureGroup.visible = state.showFigure
+  figureGroup.visible = state.showFigure && state.viewMode !== 'plan'
   groundGroup.add(figureGroup)
   scene.add(groundGroup)
 }
@@ -141,6 +147,31 @@ function adjustCameraForRadius() {
   prevRadius = r
 }
 
+/** True top-down orthographic frustum, fit to the dome's footprint. Called
+ * on entering plan mode and whenever the dome's size changes while in it. */
+function applyPlanCamera() {
+  if (!container.value) return
+  const el = container.value
+  const r = radius.value
+  const e = gridSpec(r, state.units).radius * 1.05
+  planHalfExtent = e
+  const aspect = el.clientWidth / el.clientHeight
+  if (!planCamera) {
+    planCamera = new THREE.OrthographicCamera(-e * aspect, e * aspect, e, -e, r * 0.01, r * 10)
+  } else {
+    planCamera.left = -e * aspect
+    planCamera.right = e * aspect
+    planCamera.top = e
+    planCamera.bottom = -e
+    planCamera.near = r * 0.01
+    planCamera.far = r * 10
+  }
+  planCamera.position.set(0, r * 4, 0)
+  planCamera.up.set(0, 0, -1)
+  planCamera.lookAt(0, 0, 0)
+  planCamera.updateProjectionMatrix()
+}
+
 function onPointerDown(ev: PointerEvent) {
   downAt = { x: ev.clientX, y: ev.clientY, t: performance.now() }
 }
@@ -148,11 +179,11 @@ function onPointerDown(ev: PointerEvent) {
 function onPointerUp(ev: PointerEvent) {
   // Only treat as click when the pointer barely moved (not an orbit drag).
   if (Math.hypot(ev.clientX - downAt.x, ev.clientY - downAt.y) > 5) return
-  if (!renderer || !camera || !domeGroup) return
+  if (!renderer || !currentCamera || !domeGroup) return
   const rect = renderer.domElement.getBoundingClientRect()
   pointer.x = ((ev.clientX - rect.left) / rect.width) * 2 - 1
   pointer.y = -((ev.clientY - rect.top) / rect.height) * 2 + 1
-  raycaster.setFromCamera(pointer, camera)
+  raycaster.setFromCamera(pointer, currentCamera)
   const pick = domeGroup.userData.pick as DomePickMaps
 
   // Door/window tools: place a parametric opening at the clicked spot.
@@ -224,6 +255,7 @@ onMounted(() => {
   scene.fog = new THREE.Fog(0x0a0e15, radius.value * 6, radius.value * 24)
 
   camera = new THREE.PerspectiveCamera(45, el.clientWidth / el.clientHeight, 0.1, 5000)
+  currentCamera = camera
   renderer = new THREE.WebGLRenderer({ antialias: true })
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
   renderer.setSize(el.clientWidth, el.clientHeight)
@@ -247,15 +279,35 @@ onMounted(() => {
   frameCamera()
   prevRadius = radius.value
 
+  // A share link or restored project may open directly into plan mode.
+  if (state.viewMode === 'plan') {
+    applyPlanCamera()
+    if (planCamera && controls) {
+      currentCamera = planCamera
+      controls.object = planCamera
+      controls.target.set(0, 0, 0)
+      controls.enableRotate = false
+      controls.update()
+    }
+  }
+
   renderer.domElement.addEventListener('pointerdown', onPointerDown)
   renderer.domElement.addEventListener('pointerup', onPointerUp)
 
   resizeObserver = new ResizeObserver(() => {
-    if (!renderer || !camera) return
+    if (!renderer) return
     const w = el.clientWidth
     const h = el.clientHeight
-    camera.aspect = w / h
-    camera.updateProjectionMatrix()
+    const aspect = w / h
+    if (camera) {
+      camera.aspect = aspect
+      camera.updateProjectionMatrix()
+    }
+    if (planCamera && state.viewMode === 'plan') {
+      planCamera.left = -planHalfExtent * aspect
+      planCamera.right = planHalfExtent * aspect
+      planCamera.updateProjectionMatrix()
+    }
     renderer.setSize(w, h)
   })
   resizeObserver.observe(el)
@@ -263,13 +315,13 @@ onMounted(() => {
   const loop = () => {
     raf = requestAnimationFrame(loop)
     controls?.update()
-    if (figureGroup && camera) {
+    if (figureGroup && currentCamera) {
       figureGroup.rotation.y = Math.atan2(
-        camera.position.x - figureGroup.position.x,
-        camera.position.z - figureGroup.position.z,
+        currentCamera.position.x - figureGroup.position.x,
+        currentCamera.position.z - figureGroup.position.z,
       )
     }
-    if (renderer && scene && camera) renderer.render(scene, camera)
+    if (renderer && scene && currentCamera) renderer.render(scene, currentCamera)
   }
   loop()
 })
@@ -278,6 +330,7 @@ watch([model, radius, workingRiserHeight], () => {
   rebuildDome()
   rebuildGround()
   adjustCameraForRadius()
+  if (state.viewMode === 'plan') applyPlanCamera()
 })
 // Reset-to-defaults re-frames the view from scratch.
 watch(
@@ -308,9 +361,40 @@ watch(
   { deep: true },
 )
 watch(
-  () => state.showFigure,
-  (v) => {
-    if (figureGroup) figureGroup.visible = v
+  () => [state.showFigure, state.viewMode] as const,
+  ([show, mode]) => {
+    if (figureGroup) figureGroup.visible = show && mode !== 'plan'
+  },
+)
+// Swap the active camera between the perspective view and a true top-down
+// orthographic projection, preserving the perspective orbit to restore later.
+watch(
+  () => state.viewMode,
+  (mode, prevMode) => {
+    if (mode === 'plan' && prevMode !== 'plan') {
+      if (camera && controls) {
+        savedView = { position: camera.position.clone(), target: controls.target.clone() }
+      }
+      applyPlanCamera()
+      if (planCamera && controls) {
+        currentCamera = planCamera
+        controls.object = planCamera
+        controls.target.set(0, 0, 0)
+        controls.enableRotate = false
+        controls.update()
+      }
+    } else if (prevMode === 'plan' && mode !== 'plan') {
+      if (camera && controls) {
+        currentCamera = camera
+        controls.object = camera
+        if (savedView) {
+          camera.position.copy(savedView.position)
+          controls.target.copy(savedView.target)
+        }
+        controls.enableRotate = true
+        controls.update()
+      }
+    }
   },
 )
 

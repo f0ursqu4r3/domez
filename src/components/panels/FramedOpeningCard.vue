@@ -6,6 +6,7 @@ import { formatLength } from '@/engine/units'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Field, FieldLabel } from '@/components/ui/field'
+import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import { DoorOpen, AppWindow, Sparkles, TriangleAlert, X } from '@lucide/vue'
 
 const props = defineProps<{
@@ -32,6 +33,35 @@ const sillEntry = computed(() =>
 
 const areaText = (a: number) =>
   state.units === 'imperial' ? `${(a / 144).toFixed(1)} ft²` : `${(a / 1e6).toFixed(2)} m²`
+
+const shapeOptions = computed(() =>
+  props.kind === 'door'
+    ? ([
+        { value: 'rect', label: 'Rect' },
+        { value: 'arch', label: 'Arch' },
+      ] as const)
+    : ([
+        { value: 'rect', label: 'Rect' },
+        { value: 'arch', label: 'Arch' },
+        { value: 'circle', label: 'Circle' },
+        { value: 'triangle', label: 'Tri' },
+      ] as const),
+)
+
+const buckMembersText = computed(() =>
+  props.info.buckMembers
+    .map(
+      (m) =>
+        `${m.quantity}× ${m.part} ${formatLength(m.length, state.units)}${
+          m.miterDegA > 0 ? ` @ ${m.miterDegA}°` : ''
+        }`,
+    )
+    .join(' · '),
+)
+
+const archTooFlatWarning = computed(
+  () => entry.value.shape === 'arch' && entry.value.heightMm < entry.value.widthMm / 2,
+)
 
 const placement = ref<DoorPlacementResult | null>(null)
 
@@ -73,17 +103,36 @@ function remove() {
       </Button>
     </div>
 
+    <ToggleGroup
+      :model-value="entry.shape"
+      type="single"
+      variant="outline"
+      size="sm"
+      class="w-full"
+      @update:model-value="(v: any) => v && (entry.shape = v)"
+    >
+      <ToggleGroupItem
+        v-for="s in shapeOptions" :key="s.value" :value="s.value" class="flex-1 text-xs"
+      >
+        {{ s.label }}
+      </ToggleGroupItem>
+    </ToggleGroup>
+
     <div class="grid grid-cols-3 gap-2">
       <Field>
-        <FieldLabel class="text-xs">Width ({{ smallUnit }})</FieldLabel>
+        <FieldLabel class="text-xs">{{
+          entry.shape === 'circle' ? `Diameter (${smallUnit})` : `Width (${smallUnit})`
+        }}</FieldLabel>
         <Input
           type="number" min="1" step="1" class="font-mono h-8"
           :model-value="toDisplay(entry.widthMm)"
           @update:model-value="(v) => { const n = Number(v); if (n > 0) entry.widthMm = fromDisplay(n) }"
         />
       </Field>
-      <Field>
-        <FieldLabel class="text-xs">Height ({{ smallUnit }})</FieldLabel>
+      <Field v-if="entry.shape !== 'circle'">
+        <FieldLabel class="text-xs">{{
+          entry.shape === 'arch' ? `Height incl. arch (${smallUnit})` : `Height (${smallUnit})`
+        }}</FieldLabel>
         <Input
           type="number" min="1" step="1" class="font-mono h-8"
           :model-value="toDisplay(entry.heightMm)"
@@ -129,13 +178,7 @@ function remove() {
 
     <dl class="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-xs">
       <dt class="text-muted-foreground">Buck members</dt>
-      <dd class="text-right font-mono">
-        2× jamb {{ formatLength(info.jambLength, state.units) }} · 1× header
-        {{ formatLength(info.headerLength, state.units) }}
-        <template v-if="kind === 'window'">
-          · 1× sill {{ formatLength(info.headerLength, state.units) }}
-        </template>
-      </dd>
+      <dd class="text-right font-mono">{{ buckMembersText }}</dd>
       <dt class="text-muted-foreground">Struts</dt>
       <dd class="text-right font-mono">
         {{ info.removedStrutCount }} removed · {{ info.trimmedStrutCount }} trimmed to buck
@@ -180,6 +223,18 @@ function remove() {
       <template v-else>
         Already at the cleanest bearing within ±36° ({{ placement.evaluated }} positions checked).
       </template>
+      <template v-if="placement.reason"> · {{ placement.reason }}</template>
+      <template
+        v-if="
+          kind === 'window' &&
+          placement.sillHeight !== undefined &&
+          placement.fromSillHeight !== undefined &&
+          placement.sillHeight !== placement.fromSillHeight
+        "
+      >
+        · sill {{ formatLength(placement.fromSillHeight, state.units) }} →
+        {{ formatLength(placement.sillHeight, state.units) }}
+      </template>
     </p>
 
     <p v-if="info.riserConflict" class="flex items-center gap-1.5 text-xs text-destructive">
@@ -192,6 +247,10 @@ function remove() {
         Window dips into the riser — raise the sill above
         {{ formatLength(workingRiserHeight + (info.margin ?? 0), state.units) }}.
       </template>
+    </p>
+    <p v-else-if="archTooFlatWarning" class="flex items-center gap-1.5 text-xs text-destructive">
+      <TriangleAlert class="size-3.5 shrink-0" />
+      Arch needs height ≥ half the width — raise the height or narrow the opening.
     </p>
     <p v-else-if="!info.fits" class="flex items-center gap-1.5 text-xs text-destructive">
       <TriangleAlert class="size-3.5 shrink-0" />

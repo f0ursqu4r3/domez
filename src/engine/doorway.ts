@@ -6,6 +6,8 @@ import {
   offsetConvexOutward,
   openingArea,
   openingOutline,
+  outlineBuckMembers,
+  type BuckMember,
   type OpeningShapeKind,
 } from './openingShapes'
 
@@ -61,6 +63,7 @@ export interface ClosureMember {
     | 'top edge'
     | 'sill blocking'
     | 'sill edge'
+    | 'ring blocking'
   /** Cut length, working units. */
   length: number
   quantity: number
@@ -68,9 +71,28 @@ export interface ClosureMember {
   side: -1 | 0 | 1
   /** Endpoints in the member's plane, working units. Wall members (side ±1):
    * (radialDist, heightAboveBase). Top-plane members (side 0):
-   * (tangentialOffset, radialDist) at the envelope top. */
+   * (tangentialOffset, radialDist) at the envelope top. Shaped-tunnel
+   * members ('ring blocking' / 'shell edge', side 0): (tangential, hRel) —
+   * the radial extent is carried separately in `ua`/`ub`. */
   a: [number, number]
   b: [number, number]
+  /** Radial distance (u) at each end — shaped-tunnel members only ('ring
+   * blocking' / 'shell edge' on arch, circle, triangle openings); rect
+   * closure members leave these unset. */
+  ua?: number
+  ub?: number
+}
+
+/** Margined-polygon-edge tunnel strip, sampled with `TUNNEL_STATIONS` evenly
+ * spaced stations (inclusive of endpoints) — the sampled shell profile the
+ * shaped-opening closure (sheathing area + framing) is built from. */
+export interface TunnelStrip {
+  /** Margined polygon edge endpoints (t, hRel). */
+  a: [number, number]
+  b: [number, number]
+  /** Shell radial distance at evenly spaced stations a→b (0 where the
+   * radial line misses the shell). */
+  uShell: number[]
 }
 
 /** Faceted closure outline, sectioned from the actual triangulated shell
@@ -94,6 +116,14 @@ export interface ClosureProfile {
 }
 
 export interface DoorFrameInfo extends DoorSpec {
+  /** Opening shape, echoed and defaulted to 'rect'. */
+  shape: OpeningShapeKind
+  /** Pre-margin opening outline (t, hRel) — the true opening polygon before
+   * the trim/shim margin is applied. */
+  outline: [number, number][]
+  /** Rough-buck cut list for the opening shape (jamb/header/sill for rect;
+   * arch/rim/rake members for the others). Reported for every door. */
+  buckMembers: BuckMember[]
   /** Vertical buck members, one per side (cut length = height). */
   jambLength: number
   /** Horizontal header member (rough-opening span; add your framing allowances). */
@@ -135,6 +165,10 @@ export interface DoorFrameInfo extends DoorSpec {
   closureJointCount: number
   /** Faceted closure outline for rendering; null when the door doesn't fit. */
   closureProfile: ClosureProfile | null
+  /** Sampled tunnel strips along the margined-polygon edges — arch/circle/
+   * triangle openings only; undefined for rect (which uses `closureProfile`
+   * instead). */
+  closureTunnel?: TunnelStrip[]
 }
 
 export interface DoorwayCut {
@@ -230,9 +264,9 @@ interface DoorFrame {
   cutPlaneDist: number
 }
 
-/** Convex polygon half-planes for the door's cut envelope: the margined
- * opening outline, one plane per edge, with the bottom edge special-cased
- * to match the two legacy rect rules exactly:
+/** Convex polygon half-planes for the door's cut envelope from the already-
+ * margined opening outline (`poly`), one plane per edge, with the bottom
+ * edge special-cased to match the two legacy rect rules exactly:
  * - Floor-standing doors (not a window) skip the bottom edge's plane
  *   entirely — this reproduces the legacy `zClipLow = -1e9` behavior so
  *   base-ring struts aren't borderline-excluded by an edge that, for a
@@ -246,19 +280,10 @@ interface DoorFrame {
  *   instead of the raw offset geometry — matching the legacy behavior of
  *   `zClipLow` being a plain height clip, independent of shape. */
 function buildEnvelopePlanes(
-  shape: OpeningShapeKind,
-  width: number,
-  effH: number,
-  buckBottomRel: number,
-  margin: number,
+  poly: [number, number][],
   isWindow: boolean,
   zLowRel: number,
 ): EnvelopePlane[] {
-  const poly = offsetConvexOutward(
-    openingOutline(shape, width, effH, buckBottomRel),
-    margin,
-    isWindow ? margin : 0,
-  )
   const n = poly.length
   const bottomIdx = bottomEdgeIndex(poly)
   const planes: EnvelopePlane[] = []
@@ -357,6 +382,26 @@ function localTriangles(
       return [ux * x + uy * y, -uy * x + ux * y, p[2] * radius] as [number, number, number]
     }),
   )
+}
+
+/** Stations sampled per margined-polygon edge for the tunnel closure (arch/
+ * circle/triangle), inclusive of both endpoints. */
+const TUNNEL_STATIONS = 8
+
+/** Max radial (u) hit of the vertical line at (t, zAbs) through the shell. */
+function radialShellDistance(tris: [number, number, number][][], t: number, z: number): number {
+  let best = 0
+  for (const tri of tris) {
+    const [p, q, r] = tri
+    const det = (q[1] - p[1]) * (r[2] - p[2]) - (q[2] - p[2]) * (r[1] - p[1])
+    if (Math.abs(det) < 1e-12) continue
+    const bx = t - p[1], by = z - p[2]
+    const a = (bx * (r[2] - p[2]) - by * (r[1] - p[1])) / det
+    const c = ((q[1] - p[1]) * by - (q[2] - p[2]) * bx) / det
+    if (a < -1e-9 || c < -1e-9 || a + c > 1 + 1e-9) continue
+    best = Math.max(best, p[0] + a * (q[0] - p[0]) + c * (r[0] - p[0]))
+  }
+  return best
 }
 
 /** Intersect triangles with the plane axis=value; return segments projected
@@ -539,15 +584,41 @@ export function cutDoorways(
     const zTopEnv = z0 + zHighRel
     const zLowEnv = z0 + zLowRel
 
+    // Margined opening outline (the actual cut boundary) — computed once and
+    // reused by the envelope-plane builder below and by the shaped-opening
+    // tunnel closure.
+    const marginedPoly = tooFlat
+      ? []
+      : offsetConvexOutward(
+          openingOutline(shape, spec.width, effH, buckBottomRel),
+          margin,
+          isWindow ? margin : 0,
+        )
+
+    // Rough-buck cut list, reported for every door. Rect's jamb/header stay
+    // as the legacy rough-opening dimensions; the other shapes are
+    // self-closing curves with no separate jamb/header run.
+    const buckMembers = outlineBuckMembers(shape, spec.width, effH, isWindow)
+    let jambLength = spec.height
+    let headerLength = spec.width
+    if (shape === 'arch') {
+      jambLength = effH - spec.width / 2
+      headerLength = 0
+    } else if (shape === 'circle' || shape === 'triangle') {
+      jambLength = 0
+      headerLength = 0
+    }
+
     // ---- Faceted closure from the actual shell. The closure seals the
     // region BETWEEN the shell section and the buck plane: outside the buck
-    // for a recessed entry, outside the shell for a projecting one.
-    // Rect only — shaped closures land in Task 3; until then shaped specs
-    // still cut struts/panels/vertices below, but report a zero closure. ----
+    // for a recessed entry, outside the shell for a projecting one. Rect
+    // sections the shell profile directly; arch/circle/triangle sample a
+    // tunnel strip along each margined-polygon edge instead. ----
     let closureProfile: ClosureProfile | null = null
     let closureSideArea = 0
     let closureTopArea = 0
     let closureBottomArea = 0
+    let closureTunnel: TunnelStrip[] | undefined
     const closureFraming: ClosureMember[] = []
     if (fits && shape === 'rect') {
       const tris = localTriangles(model, radius, ux, uy)
@@ -756,27 +827,174 @@ export function cutDoorways(
         planeMembers(top, 'top blocking', 'top edge')
         if (isWindow) planeMembers(bottom, 'sill blocking', 'sill edge')
       }
+    } else if (fits) {
+      // ---- Shaped (arch/circle/triangle) tunnel closure: sample each
+      // margined-polygon edge at TUNNEL_STATIONS stations and read the shell
+      // radial distance directly (no facet sectioning — the polygon has
+      // arbitrarily many edges at arbitrary angles). ----
+      const tris = localTriangles(model, radius, ux, uy)
+      const n = marginedPoly.length
+      const strips: TunnelStrip[] = []
+      for (let i = 0; i < n; i++) {
+        const a = marginedPoly[i]
+        const b = marginedPoly[(i + 1) % n]
+        const uShell: number[] = []
+        for (let s = 0; s < TUNNEL_STATIONS; s++) {
+          const frac = s / (TUNNEL_STATIONS - 1)
+          const t = a[0] + (b[0] - a[0]) * frac
+          const hRel = a[1] + (b[1] - a[1]) * frac
+          uShell.push(radialShellDistance(tris, t, z0 + hRel))
+        }
+        strips.push({ a, b, uShell })
+      }
+      closureTunnel = strips
+
+      // closureSideArea: trapezoid integral of max(0, uShell − framePlaneDist)
+      // along each edge (TUNNEL_STATIONS − 1 spans).
+      for (const strip of strips) {
+        const edgeLen = Math.hypot(strip.b[0] - strip.a[0], strip.b[1] - strip.a[1])
+        const spanLen = edgeLen / (TUNNEL_STATIONS - 1)
+        for (let s = 1; s < TUNNEL_STATIONS; s++) {
+          const v0 = Math.max(0, strip.uShell[s - 1] - framePlaneDist)
+          const v1 = Math.max(0, strip.uShell[s] - framePlaneDist)
+          closureSideArea += ((v0 + v1) / 2) * spanLen
+        }
+      }
+
+      // ---- Closure framing along the tunnel ----
+      const spacing = opts.studSpacing ?? 0
+      if (spacing > 0) {
+        for (let i = 0; i < n; i++) {
+          const a = marginedPoly[i]
+          const b = marginedPoly[(i + 1) % n]
+          const strip = strips[i]
+          const edgeLen = Math.hypot(b[0] - a[0], b[1] - a[1])
+          const stationPos = (s: number): [number, number] => [
+            a[0] + ((b[0] - a[0]) * s) / (TUNNEL_STATIONS - 1),
+            a[1] + ((b[1] - a[1]) * s) / (TUNNEL_STATIONS - 1),
+          ]
+
+          // Ring blocking: radial stubs at k/nBlock along the edge. k=0 is
+          // the shared vertex with the previous edge — the next edge's own
+          // k=0 covers this edge's far endpoint, so no duplicates.
+          const nBlock = Math.max(1, Math.ceil(edgeLen / spacing))
+          for (let k = 0; k < nBlock; k++) {
+            const frac = k / nBlock
+            const t = a[0] + (b[0] - a[0]) * frac
+            const hRel = a[1] + (b[1] - a[1]) * frac
+            const uShellExact = radialShellDistance(tris, t, z0 + hRel)
+            const length = Math.abs(uShellExact - framePlaneDist)
+            if (length >= opts.minStubLength) {
+              closureFraming.push({
+                part: 'ring blocking',
+                length,
+                quantity: 1,
+                side: 0,
+                a: [t, hRel],
+                b: [t, hRel],
+                ua: framePlaneDist,
+                ub: framePlaneDist + length,
+              })
+            }
+          }
+
+          // Shell edge: chain consecutive tunnel stations that both clear
+          // the buck plane; fold a sub-minimum trailing span into its
+          // predecessor (same pattern as the rect shell-edge chain above),
+          // skip isolated single-station slivers.
+          const qualifies = (s: number) => strip.uShell[s] > framePlaneDist + 1e-6
+          let idx = 0
+          while (idx < TUNNEL_STATIONS) {
+            if (!qualifies(idx)) {
+              idx++
+              continue
+            }
+            let end = idx
+            while (end + 1 < TUNNEL_STATIONS && qualifies(end + 1)) end++
+            if (end > idx) {
+              let start = idx
+              // Track this run's own last-pushed member (not just whatever
+              // happens to be at the end of closureFraming) so a fold never
+              // reaches across into an unrelated edge or run.
+              let lastInRun: ClosureMember | null = null
+              for (let k = idx + 1; k <= end; k++) {
+                const p0 = stationPos(start)
+                const p1 = stationPos(k)
+                const u0 = strip.uShell[start]
+                const u1 = strip.uShell[k]
+                const len = Math.hypot(Math.hypot(p1[0] - p0[0], p1[1] - p0[1]), u1 - u0)
+                const isLastInRun = k === end
+                if (len >= opts.minStubLength) {
+                  const member: ClosureMember = {
+                    part: 'shell edge',
+                    length: len,
+                    quantity: 1,
+                    side: 0,
+                    a: p0,
+                    b: p1,
+                    ua: u0,
+                    ub: u1,
+                  }
+                  closureFraming.push(member)
+                  lastInRun = member
+                  start = k
+                } else if (isLastInRun) {
+                  // Trailing span too short for its own member: fold it into
+                  // this run's previous member if one exists, otherwise it's
+                  // an isolated sliver with nothing to attach to — drop it.
+                  if (len > 1e-6 && lastInRun) {
+                    lastInRun.b = p1
+                    lastInRun.ub = u1
+                    lastInRun.length = Math.hypot(
+                      Math.hypot(p1[0] - lastInRun.a[0], p1[1] - lastInRun.a[1]),
+                      u1 - lastInRun.ua!,
+                    )
+                  }
+                  start = k
+                }
+              }
+            }
+            idx = end + 1
+          }
+        }
+      }
     }
 
-    // Unique framing junctions (member ends + the four buck corners).
+    // Unique framing junctions (member ends + buck corners, or — for shaped
+    // openings — pre-margin polygon vertices at the buck plane).
     const joints = new Set<string>()
-    const jkey = (plane: number, x: number, y: number) =>
-      `${plane}:${Math.round(x * 2)}:${Math.round(y * 2)}`
-    for (const m of closureFraming) {
-      joints.add(jkey(m.side, m.a[0], m.a[1]))
-      joints.add(jkey(m.side, m.b[0], m.b[1]))
-    }
-    if (fits && shape === 'rect') {
-      joints.add(jkey(9, -halfBuck, buckBottomRel))
-      joints.add(jkey(9, halfBuck, buckBottomRel))
-      joints.add(jkey(9, -halfBuck, buckTopRel))
-      joints.add(jkey(9, halfBuck, buckTopRel))
+    if (shape === 'rect') {
+      const jkey = (plane: number, x: number, y: number) =>
+        `${plane}:${Math.round(x * 2)}:${Math.round(y * 2)}`
+      for (const m of closureFraming) {
+        joints.add(jkey(m.side, m.a[0], m.a[1]))
+        joints.add(jkey(m.side, m.b[0], m.b[1]))
+      }
+      if (fits) {
+        joints.add(jkey(9, -halfBuck, buckBottomRel))
+        joints.add(jkey(9, halfBuck, buckBottomRel))
+        joints.add(jkey(9, -halfBuck, buckTopRel))
+        joints.add(jkey(9, halfBuck, buckTopRel))
+      }
+    } else {
+      const jkey3 = (u: number, t: number, h: number) =>
+        `${Math.round(u * 2)}:${Math.round(t * 2)}:${Math.round(h * 2)}`
+      for (const m of closureFraming) {
+        joints.add(jkey3(m.ua ?? framePlaneDist, m.a[0], m.a[1]))
+        joints.add(jkey3(m.ub ?? framePlaneDist, m.b[0], m.b[1]))
+      }
+      if (fits) {
+        for (const [t, hRel] of preMarginPoly) joints.add(jkey3(framePlaneDist, t, hRel))
+      }
     }
 
     perDoor.set(spec.id, {
       ...spec,
-      jambLength: spec.height,
-      headerLength: spec.width,
+      shape,
+      outline: preMarginPoly,
+      buckMembers,
+      jambLength,
+      headerLength,
       framePlaneDist,
       tunnelDepth: rBase - framePlaneDist,
       fits,
@@ -799,6 +1017,7 @@ export function cutDoorways(
       closureFraming,
       closureJointCount: joints.size,
       closureProfile,
+      closureTunnel,
     })
 
     // A riser-conflicted or too-flat-arch portal cuts nothing.
@@ -808,7 +1027,7 @@ export function cutDoorways(
         ux,
         uy,
         z0,
-        planes: buildEnvelopePlanes(shape, spec.width, effH, buckBottomRel, margin, isWindow, zLowRel),
+        planes: buildEnvelopePlanes(marginedPoly, isWindow, zLowRel),
         cutPlaneDist: fits ? Math.min(framePlaneDist, Math.sqrt(fitSq)) : framePlaneDist,
       })
     }

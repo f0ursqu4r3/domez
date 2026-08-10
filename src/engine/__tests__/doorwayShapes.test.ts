@@ -101,6 +101,37 @@ describe('shaped cuts', () => {
   })
 })
 
+describe('shaped buck + tunnel closure', () => {
+  const circle = { id: 'W1', azimuthDeg: 15, width: 40, height: 40, sillHeight: 48, margin: 1.5, shape: 'circle' as const }
+  const cut = cutDoorways(dome, [circle], R, { minStubLength: 6, studSpacing: 16 })
+  const w = cut.doors[0]
+  it('reports 16 rim segments and the outline polygon', () => {
+    expect(w.fits).toBe(true)
+    expect(w.shape).toBe('circle')
+    expect(w.outline).toHaveLength(16)
+    const rim = w.buckMembers.find((m) => m.part === 'rim segment')!
+    expect(rim.quantity).toBe(16)
+    expect(rim.miterDegA).toBeCloseTo(11.25, 6)
+  })
+  it('tunnel closure has 16 strips with positive area', () => {
+    expect(w.closureTunnel).toHaveLength(16)
+    expect(w.closureSideArea).toBeGreaterThan(0)
+    expect(w.closureTopArea).toBe(0)
+    for (const strip of w.closureTunnel!) expect(strip.uShell).toHaveLength(8)
+  })
+  it('ring blocking + shell edge members are all above the scrap floor', () => {
+    const parts = new Set(w.closureFraming.map((m) => m.part))
+    expect(parts.has('ring blocking')).toBe(true)
+    for (const m of w.closureFraming) expect(m.length).toBeGreaterThanOrEqual(6 - 1e-9)
+    expect(w.closureJointCount).toBeGreaterThan(0)
+  })
+  it('rect doors still expose buckMembers (jamb/header)', () => {
+    const cutR = cutDoorways(dome, [door], R, { minStubLength: 6 })
+    expect(cutR.doors[0].buckMembers.map((m) => m.part)).toEqual(['jamb', 'header'])
+    expect(cutR.doors[0].shape).toBe('rect')
+  })
+})
+
 describe('window bottom clip clamps to the base plane (regression)', () => {
   // Real generateDome() models never have geometry below the base plane —
   // every kept face has all three vertices at z ≥ cutZ by construction — so

@@ -102,6 +102,16 @@ const groups = computed(() => [
             },
           ]
         : []),
+      ...(state.mode === 'geodesic'
+        ? [
+            {
+              label: 'Loads CSV',
+              desc: 'per-strut forces + utilization',
+              icon: FileSpreadsheet,
+              run: exporters.loadsCsv,
+            },
+          ]
+        : []),
       { label: 'DXF', desc: 'strut templates + top plan', icon: FileCode, run: exporters.dxf },
     ],
   },

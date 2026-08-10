@@ -13,6 +13,7 @@ import PartsTab from '@/components/panels/PartsTab.vue'
 import MaterialsTab from '@/components/panels/MaterialsTab.vue'
 import BuildTab from '@/components/panels/BuildTab.vue'
 import OpeningsPanel from '@/components/panels/OpeningsPanel.vue'
+import LoadsTab from '@/components/panels/LoadsTab.vue'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { ScrollArea } from '@/components/ui/scroll-area'
 
@@ -153,6 +154,7 @@ const chips = computed(() => [
           >
             <TabsTrigger value="parts" class="text-xs">Parts</TabsTrigger>
             <TabsTrigger value="openings" class="text-xs">Openings</TabsTrigger>
+            <TabsTrigger value="loads" class="text-xs">Loads</TabsTrigger>
             <TabsTrigger value="materials" class="text-xs">Materials</TabsTrigger>
             <TabsTrigger value="build" class="text-xs">Build</TabsTrigger>
           </TabsList>
@@ -161,6 +163,9 @@ const chips = computed(() => [
           ></TabsContent>
           <TabsContent value="openings" class="min-h-0 flex-1"
             ><ScrollArea class="h-full"><OpeningsPanel /></ScrollArea
+          ></TabsContent>
+          <TabsContent value="loads" class="min-h-0 flex-1"
+            ><ScrollArea class="h-full"><LoadsTab /></ScrollArea
           ></TabsContent>
           <TabsContent value="materials" class="min-h-0 flex-1"
             ><ScrollArea class="h-full"><MaterialsTab /></ScrollArea

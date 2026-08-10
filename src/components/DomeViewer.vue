@@ -302,7 +302,7 @@ watch(
     riser.value,
     state.jointId,
     workingEndOffset.value,
-    loadsResult.value,
+    state.viewMode === 'loads' ? loadsResult.value : null,
   ],
   () => rebuildDome(),
   { deep: true },

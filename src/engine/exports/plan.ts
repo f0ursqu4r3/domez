@@ -252,10 +252,10 @@ export function planSvg(model: DomeModel, doorway: DoorwayCut, opts: PlanOptions
   for (const d of doors) {
     if (!d.fits) continue
     const ringR = ringRadiusAt(d.azimuthDeg, outerPts)
-    // Angular half-span atan(width/2 / ringR); the tangential half-width at
-    // ringR is ringR·tan(that) = width/2 exactly — used directly below.
-    const halfSpanRad = Math.atan(d.width / 2 / Math.max(ringR, 1e-6))
-    const halfWidth = ringR * Math.tan(halfSpanRad)
+    // Angular half-span = atan(width/2 / ringR); the tangential half-width
+    // at ringR is ringR·tan(that) = width/2 exactly, so it's used directly
+    // (also sidesteps 0·∞ if ringR degenerates to 0 — no base ring).
+    const halfWidth = d.width / 2
     const r0 = ringR + overlap
     const r1 = ringR - opts.wallThickness - overlap
     const quad = gapQuad(d.azimuthDeg, halfWidth, r0, r1).map((p) => toPage(...p))
@@ -272,8 +272,9 @@ export function planSvg(model: DomeModel, doorway: DoorwayCut, opts: PlanOptions
   for (const w of windows) {
     if (!w.fits) continue
     const ringR = ringRadiusAt(w.azimuthDeg, outerPts)
-    const halfSpanRad = Math.atan(w.width / 2 / Math.max(ringR, 1e-6))
-    const halfWidth = ringR * Math.tan(halfSpanRad)
+    // See the door loop above: width/2 is the tangential half-width at
+    // ringR directly, equal to ringR·tan(atan(width/2/ringR)).
+    const halfWidth = w.width / 2
     const r0 = ringR + overlap
     const r1 = ringR - opts.wallThickness - overlap
     const quad = gapQuad(w.azimuthDeg, halfWidth, r0, r1).map((p) => toPage(...p))

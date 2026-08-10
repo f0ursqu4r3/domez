@@ -72,6 +72,12 @@ const groups = computed(() => [
         icon: PencilRuler,
         run: exporters.panelPatterns,
       },
+      {
+        label: 'Floor plan SVG',
+        desc: 'dimensioned plan + headroom',
+        icon: PencilRuler,
+        run: exporters.floorPlan,
+      },
       ...(state.jointId === 'framed-panel'
         ? []
         : [

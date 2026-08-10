@@ -41,6 +41,7 @@ import { cutTemplatesSvg, boardDiagramsSvg } from '@/engine/exports/templates'
 import { assemblyGuideSvg } from '@/engine/exports/guide'
 import { panelPatternsSvg } from '@/engine/exports/patterns'
 import { frameJigsSvg } from '@/engine/exports/frames'
+import { planSvg } from '@/engine/exports/plan'
 import { domeObj } from '@/engine/exports/obj'
 import { fabricationSvg, hubLabelsSvg } from '@/engine/exports/svg'
 import { fabricationDxf } from '@/engine/exports/dxf'
@@ -932,6 +933,21 @@ const exporters = {
     download(
       `${fileStem.value}-panel-patterns.svg`,
       panelPatternsSvg(panelPlan.value, { units: state.units, title: titleOf() }),
+      'image/svg+xml',
+    ),
+  floorPlan: () =>
+    download(
+      `${fileStem.value}-floor-plan.svg`,
+      planSvg(model.value, doorway.value, {
+        units: state.units,
+        radius: radius.value,
+        riserHeight: workingRiserHeight.value,
+        wallThickness:
+          strutSectionWorking.value.kind === 'rect'
+            ? strutSectionWorking.value.depth
+            : strutSectionWorking.value.diameter,
+        title: titleOf(),
+      }),
       'image/svg+xml',
     ),
   boardDiagrams: () =>

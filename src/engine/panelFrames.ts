@@ -20,6 +20,15 @@ export interface FrameType {
   members: FrameMemberSpec[]
   outline: [number, number][]
   cornerAnglesDeg: number[]
+  /** For each outline edge (same order/index as `outline`), the index into
+   * `members[]` of the spec that edge is actually cut from. `members` is
+   * deduped (one entry per distinct cut, with a `count`), so this is the
+   * only place the true per-edge mapping survives — geometry alone (edge
+   * length + corner angles) cannot always reconstruct it, since two
+   * members can be geometrically identical and differ only in bevel or
+   * boundary (e.g. a symmetric panel with one boundary/sill edge among
+   * otherwise-identical interior edges). */
+  edgeMemberIdx: number[]
 }
 
 export interface PanelFramePlan {
@@ -192,13 +201,16 @@ export function buildPanelFrames(
   const types: FrameType[] = sorted.map((grp, ti) => {
     const g = grp.rep
     const nV = g.edges.length
-    // Dedupe identical member cuts within the panel.
+    // Dedupe identical member cuts within the panel, tracking each edge's
+    // key so the true per-edge → member mapping survives the dedupe.
     const specs = new Map<string, FrameMemberSpec>()
+    const edgeKeys: string[] = new Array(nV)
     g.edges.forEach((e, i) => {
       const ms = g.corners[i] / 2
       const me = g.corners[(i + 1) % nV] / 2
       const [a, b] = ms <= me ? [ms, me] : [me, ms]
       const key = `${r1(e.len)}|${r1(e.bevel)}|${r1(a)}|${r1(b)}|${e.boundary}`
+      edgeKeys[i] = key
       const cur = specs.get(key)
       if (cur) cur.count++
       else
@@ -214,6 +226,8 @@ export function buildPanelFrames(
     })
     const members = [...specs.values()]
     members.forEach((m, i) => (m.label = `F${ti + 1}-${String.fromCharCode(97 + i)}`))
+    const idxByKey = new Map([...specs.keys()].map((k, idx) => [k, idx]))
+    const edgeMemberIdx = edgeKeys.map((k) => idxByKey.get(k)!)
     return {
       label: `F${ti + 1}`,
       panelCount: grp.count,
@@ -221,6 +235,7 @@ export function buildPanelFrames(
       members,
       outline: g.outline,
       cornerAnglesDeg: g.corners,
+      edgeMemberIdx,
     }
   })
 

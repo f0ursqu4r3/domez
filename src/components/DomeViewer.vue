@@ -141,6 +141,11 @@ function adjustCameraForRadius() {
     const scale = r / prevRadius
     camera.position.multiplyScalar(scale)
     controls.target.multiplyScalar(scale)
+    // The saved plan-entry view must track radius changes made while in plan mode.
+    if (savedView) {
+      savedView.position.multiplyScalar(scale)
+      savedView.target.multiplyScalar(scale)
+    }
     updateProjection(r)
     controls.update()
   }

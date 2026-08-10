@@ -3,7 +3,7 @@ import { generateDome } from '../dome'
 import { generateZome } from '../zome'
 import { cutDoorways, emptyDoorwayCut } from '../doorway'
 import { orderedBaseRing } from '../riser'
-import { headroomRing, planSvg } from '../exports/plan'
+import { headroomRing, planSvg, ringRadiusAt } from '../exports/plan'
 
 describe('floor plan', () => {
   const NO_DOOR = emptyDoorwayCut()
@@ -71,5 +71,63 @@ describe('floor plan', () => {
     const ring = orderedBaseRing(m)
     expect(ring.length).toBeGreaterThan(0)
     expect(svg).toContain('data-plan-footprint')
+  })
+
+  it('ringRadiusAt stays within the base ring at any azimuth (C1)', () => {
+    const m = generateDome({ frequency: 3, fraction: '1/2', baseMode: 'leveled' })
+    const R = 156
+    const ringIds = orderedBaseRing(m)
+    const outerPts: [number, number][] = ringIds.map((vi) => {
+      const p = m.vertices[vi].position
+      return [p[0] * R, p[1] * R]
+    })
+    const n = outerPts.length
+    const vertexRadii = outerPts.map(([x, y]) => Math.hypot(x, y))
+    // Upper bound: for a straight edge, distance-from-origin is convex along
+    // the segment, so its max on the segment is at an endpoint — the global
+    // max is therefore bounded by the farthest vertex.
+    const max = Math.max(...vertexRadii)
+    // Lower bound: the closest approach of the origin to each edge segment
+    // (clamped to the segment) — ringRadiusAt can never return less than the
+    // nearest such approach across all edges.
+    let min = Math.min(...vertexRadii)
+    for (let i = 0; i < n; i++) {
+      const [x0, y0] = outerPts[i]
+      const [x1, y1] = outerPts[(i + 1) % n]
+      const ex = x1 - x0
+      const ey = y1 - y0
+      const len2 = ex * ex + ey * ey
+      const t = len2 > 0 ? Math.max(0, Math.min(1, -(x0 * ex + y0 * ey) / len2)) : 0
+      min = Math.min(min, Math.hypot(x0 + t * ex, y0 + t * ey))
+    }
+    for (const az of [0, 5, 12, 90]) {
+      const r = ringRadiusAt(az, outerPts)
+      expect(r).toBeGreaterThanOrEqual(min - 1e-6)
+      expect(r).toBeLessThanOrEqual(max + 1e-6)
+    }
+  })
+
+  it('headroom ring clamps to the footprint instead of poking past it (I1)', () => {
+    const m = generateDome({ frequency: 3, fraction: '5/8', baseMode: 'leveled' })
+    const R = 156
+    expect(headroomRing(m, R, 0, 48)).toEqual({ kind: 'everywhere' })
+    const outcome72 = headroomRing(m, R, 0, 72)
+    if (outcome72.kind === 'ring') {
+      expect(outcome72.radius).toBeLessThan(m.unitBaseRadius * R)
+    }
+  })
+
+  it('dimension extension ticks have real length, never a zero-length line (I2)', () => {
+    const m = generateDome({ frequency: 3, fraction: '1/2', baseMode: 'leveled' })
+    const svg = planSvg(m, NO_DOOR, OPTS)
+    const dimGroupMatch = svg.match(/<g data-dim="1">([\s\S]*?)<\/g>/)
+    expect(dimGroupMatch).not.toBeNull()
+    const group = dimGroupMatch![1]
+    const lineRe = /<line[^>]*x1="([-\d.]+)"[^>]*y1="([-\d.]+)"[^>]*x2="([-\d.]+)"[^>]*y2="([-\d.]+)"/g
+    const lines = [...group.matchAll(lineRe)]
+    expect(lines.length).toBeGreaterThan(0)
+    for (const [, x1, y1, x2, y2] of lines) {
+      expect(x1 === x2 && y1 === y2).toBe(false)
+    }
   })
 })

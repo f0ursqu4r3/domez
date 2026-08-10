@@ -42,12 +42,15 @@ export function headroomRing(
     const zTarget = (model.cutZ * R - riserHeight + h) / R // unit z
     if (zTarget >= prof[prof.length - 1][0]) return { kind: 'nowhere' }
     if (zTarget <= prof[0][0]) return { kind: 'everywhere' }
+    const footprintR = model.unitBaseRadius * R
     for (let i = 1; i < prof.length; i++) {
       const [z0, r0] = prof[i - 1]
       const [z1, r1] = prof[i]
       if (zTarget <= z1) {
         const t = (zTarget - z0) / (z1 - z0 || 1)
-        return { kind: 'ring', radius: (r0 + (r1 - r0) * t) * R }
+        const ringRadius = (r0 + (r1 - r0) * t) * R
+        if (ringRadius >= footprintR) return { kind: 'everywhere' }
+        return { kind: 'ring', radius: ringRadius }
       }
     }
     return { kind: 'nowhere' }
@@ -55,7 +58,9 @@ export function headroomRing(
   // Sphere-based (geodesic + goldberg dual): unit sphere × R.
   const zStar = model.cutZ * R - riserHeight + h
   if (zStar >= R) return { kind: 'nowhere' }
-  return { kind: 'ring', radius: Math.sqrt(R * R - zStar * zStar) }
+  const ringRadius = Math.sqrt(R * R - zStar * zStar)
+  if (ringRadius >= model.unitBaseRadius * R) return { kind: 'everywhere' }
+  return { kind: 'ring', radius: ringRadius }
 }
 
 type Pt = [number, number]
@@ -99,7 +104,7 @@ function insetPolygon(pts: Pt[], centroid: Pt, d: number): Pt[] {
  * (0 = +x). Ray-casts against every ring edge and keeps the farthest hit —
  * correct for the star-shaped base rings this engine produces. Falls back
  * to the mean vertex radius when the ray misses (degenerate rings). */
-function ringRadiusAt(azDeg: number, pts: Pt[]): number {
+export function ringRadiusAt(azDeg: number, pts: Pt[]): number {
   if (pts.length < 3) return 0
   const az = (azDeg * Math.PI) / 180
   const dx = Math.cos(az)
@@ -113,8 +118,8 @@ function ringRadiusAt(azDeg: number, pts: Pt[]): number {
     const ey = y1 - y0
     const det = ex * dy - ey * dx
     if (Math.abs(det) < 1e-12) continue
-    const t = (x0 * ey - y0 * ex) / det
-    const u = (x0 * dy - y0 * dx) / det
+    const t = (ex * y0 - ey * x0) / det
+    const u = (dx * y0 - dy * x0) / det
     if (t >= -1e-9 && u >= -1e-6 && u <= 1 + 1e-6) best = Math.max(best, t)
   }
   if (best > -Infinity) return best
@@ -155,10 +160,17 @@ export function planSvg(model: DomeModel, doorway: DoorwayCut, opts: PlanOptions
   const centroid = centroidOf(outerPts)
   const innerPts = insetPolygon(outerPts, centroid, opts.wallThickness)
 
-  let minX = Math.min(...outerPts.map((p) => p[0]))
-  let maxX = Math.max(...outerPts.map((p) => p[0]))
-  let minY = Math.min(...outerPts.map((p) => p[1]))
-  let maxY = Math.max(...outerPts.map((p) => p[1]))
+  // Footprint-only bbox — the printed overall dimension always describes the
+  // building, never a headroom ring that happens to reach further out.
+  const footMinX = Math.min(...outerPts.map((p) => p[0]))
+  const footMaxX = Math.max(...outerPts.map((p) => p[0]))
+  const footMinY = Math.min(...outerPts.map((p) => p[1]))
+  const footMaxY = Math.max(...outerPts.map((p) => p[1]))
+
+  let minX = footMinX
+  let maxX = footMaxX
+  let minY = footMinY
+  let maxY = footMaxY
 
   // ---- Headroom thresholds ----
   const thresholds = opts.units === 'imperial' ? [72, 48] : [2000, 1200]
@@ -291,17 +303,19 @@ export function planSvg(model: DomeModel, doorway: DoorwayCut, opts: PlanOptions
   push(`<g data-dim="1">`)
   {
     // Extension ticks + overall x-span dimension line, south of the footprint.
-    const dimWorldY = minY - padSouth * 0.35
-    const [xa, ya] = toPage(minX, minY)
-    const [xb] = toPage(minX, dimWorldY)
-    const [xc, yc] = toPage(maxX, minY)
-    const [xd] = toPage(maxX, dimWorldY)
-    push(`<line class="dim" x1="${xa.toFixed(3)}" y1="${ya.toFixed(3)}" x2="${xb.toFixed(3)}" y2="${yc.toFixed(3)}"/>`)
-    push(`<line class="dim" x1="${xc.toFixed(3)}" y1="${yc.toFixed(3)}" x2="${xd.toFixed(3)}" y2="${yc.toFixed(3)}"/>`)
-    const [lineY] = [toPage(minX, dimWorldY)[1]]
+    // Extents here are the footprint's own bbox — never widened by a headroom
+    // ring — so the printed span always describes the building.
+    const dimWorldY = footMinY - padSouth * 0.35
+    const [xa, ya] = toPage(footMinX, footMinY)
+    const [xb, yb] = toPage(footMinX, dimWorldY)
+    const [xc, yc] = toPage(footMaxX, footMinY)
+    const [xd, yd] = toPage(footMaxX, dimWorldY)
+    push(`<line class="dim" x1="${xa.toFixed(3)}" y1="${ya.toFixed(3)}" x2="${xb.toFixed(3)}" y2="${yb.toFixed(3)}"/>`)
+    push(`<line class="dim" x1="${xc.toFixed(3)}" y1="${yc.toFixed(3)}" x2="${xd.toFixed(3)}" y2="${yd.toFixed(3)}"/>`)
+    const lineY = yb
     push(`<line class="dim" x1="${xa.toFixed(3)}" y1="${lineY.toFixed(3)}" x2="${xc.toFixed(3)}" y2="${lineY.toFixed(3)}"/>`)
     push(
-      `<text x="${((xa + xc) / 2).toFixed(3)}" y="${(lineY + fs * 1.2).toFixed(3)}" class="dimlbl">${esc(fmt(maxX - minX))}</text>`,
+      `<text x="${((xa + xc) / 2).toFixed(3)}" y="${(lineY + fs * 1.2).toFixed(3)}" class="dimlbl">${esc(fmt(footMaxX - footMinX))}</text>`,
     )
 
     // Floor area, from the shoelace area of the outer ring.
@@ -312,9 +326,12 @@ export function planSvg(model: DomeModel, doorway: DoorwayCut, opts: PlanOptions
       `<text x="${((xa + xc) / 2).toFixed(3)}" y="${(lineY + fs * 2.6).toFixed(3)}" class="dimlbl">floor area ${esc(areaText)}</text>`,
     )
 
-    // Scale bar: imperial 24″ × 5, metric 500 mm × 5 — drawn at plan scale.
+    // Scale bar: imperial 24″ × 5, metric 500 mm × 5 — drawn at plan scale,
+    // clamped to the drawing box's own span (drop trailing segments rather
+    // than overflow the page; always keep at least one).
     const step = opts.units === 'imperial' ? 24 : 500
-    const segs = 5
+    const maxSegs = Math.max(1, Math.floor(boxW / s / step))
+    const segs = Math.min(5, maxSegs)
     const barWorldY = minY - padSouth * 0.75
     const [bx0, by0] = toPage(minX, barWorldY)
     for (let i = 0; i < segs; i++) {
@@ -329,14 +346,12 @@ export function planSvg(model: DomeModel, doorway: DoorwayCut, opts: PlanOptions
     )
 
     // Azimuth arrow at 0° (world +x), just outside the wall.
-    const arrowR0 = maxX * 0.02 + Math.max(maxX, 1)
     const [ax0, ay0] = toPage(0, 0)
     const [ax1, ay1] = toPage(Math.max(maxX, ringRadiusAt(0, outerPts)) + padEast * 0.6, 0)
     push(`<line class="arrow" x1="${ax0.toFixed(3)}" y1="${ay0.toFixed(3)}" x2="${ax1.toFixed(3)}" y2="${ay1.toFixed(3)}"/>`)
     push(
       `<text x="${(ax1 + fs * 0.4).toFixed(3)}" y="${(ay1 + fs * 0.3).toFixed(3)}" class="s">0°</text>`,
     )
-    void arrowR0
   }
   push(`</g>`)
 

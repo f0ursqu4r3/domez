@@ -4,6 +4,7 @@ import { generateZome } from '../zome'
 import { cutDoorways, openingPrisms } from '../doorway'
 import { clipPanels, panelUnits } from '../panelClip'
 import type { DomeModel } from '../types'
+import type { OpeningPrism } from '../doorway'
 
 const R = 156
 const dome = generateDome({ frequency: 3, fraction: '1/2', baseMode: 'leveled' })
@@ -470,6 +471,171 @@ describe('two-piece split', () => {
     }
     const loopAreaSum = c.loops.reduce((s, l) => s + polyArea3(l.pts as [number, number, number][]), 0)
     expect(loopAreaSum).toBeCloseTo(c.area, 6)
+  })
+})
+
+/** True when the planar 3D loop is convex (cross products of consecutive
+ * edges all point the same way along the loop's Newell normal, within a
+ * relative tolerance for collinear vertices). */
+function isConvexLoop(pts: readonly (readonly number[])[]): boolean {
+  let nx = 0, ny = 0, nz = 0
+  for (let i = 0; i < pts.length; i++) {
+    const a = pts[i], b = pts[(i + 1) % pts.length]
+    nx += (a[1] - b[1]) * (a[2] + b[2])
+    ny += (a[2] - b[2]) * (a[0] + b[0])
+    nz += (a[0] - b[0]) * (a[1] + b[1])
+  }
+  const nl = Math.hypot(nx, ny, nz) || 1
+  let scale = 0
+  for (let i = 0; i < pts.length; i++) {
+    const a = pts[i], b = pts[(i + 1) % pts.length]
+    scale = Math.max(scale, Math.hypot(b[0] - a[0], b[1] - a[1], b[2] - a[2]))
+  }
+  const tol = scale * scale * 1e-9
+  let sign = 0
+  for (let i = 0; i < pts.length; i++) {
+    const p = pts[i], q = pts[(i + 1) % pts.length], r = pts[(i + 2) % pts.length]
+    const e1 = [q[0] - p[0], q[1] - p[1], q[2] - p[2]]
+    const e2 = [r[0] - q[0], r[1] - q[1], r[2] - q[2]]
+    const cr = [e1[1] * e2[2] - e1[2] * e2[1], e1[2] * e2[0] - e1[0] * e2[2], e1[0] * e2[1] - e1[1] * e2[0]]
+    const d = (cr[0] * nx + cr[1] * ny + cr[2] * nz) / nl
+    if (Math.abs(d) < tol) continue
+    if (sign === 0) sign = Math.sign(d)
+    else if (Math.sign(d) !== sign) return false
+  }
+  return true
+}
+
+/** Overlap area between two coplanar hole loops, at least one of which is
+ * convex (Sutherland–Hodgman needs a convex clipper; the subject may be
+ * non-convex — e.g. an L-shaped hole remnant — and the clipped area stays
+ * exact). */
+function holeOverlapArea(a: readonly (readonly number[])[], b: readonly (readonly number[])[]): number {
+  if (isConvexLoop(b)) return convexOverlapArea(a, b)
+  if (isConvexLoop(a)) return convexOverlapArea(b, a)
+  throw new Error('holeOverlapArea: neither loop is convex')
+}
+
+// Regression coverage for the two round-3 residuals, both rooted in deciding
+// hole-suppression with a *different* oracle (a geometric convex-containment
+// test, 1e-6·diameter epsilon) than the one deciding hole-notching (bite tags
+// after the sequential clip, 1e-9·diameter epsilon):
+//   A. FLUSH/hair-crossing: a contained opening whose boundary is collinear
+//      with (or crosses by < 1e-6·d) its containing hole's boundary resolved
+//      as "contained" (suppress) on the outer side while the tags said
+//      "touching" (notch) on the hole side — the opening's whole area
+//      silently vanished from the void (signedLoopAreaSum ran +33.6 in² hot
+//      on this exact fixture).
+//   B. NON-CONVEX containers: a hole notched into an L by a partner prism
+//      failed the convex-only containment test, so a third prism strictly
+//      inside the L remnant was re-recorded as a redundant hole
+//      (double-subtraction, signedLoopAreaSum −50.4 in² on this fixture).
+// Both are now decided by ONE oracle: each existing hole's bite by the new
+// prism (the same sequential clip), suppressing the outer record iff some
+// hole's bite is non-touching AND area-equal to the outer bite.
+describe('flush and contained openings (synthetic rect prisms, 3V)', () => {
+  // First mid-height +x facet of the frozen 3V dome (same probe idea as
+  // panelCentroidSpot, in panel-unit space): big enough that a 16"-wide rect
+  // prism lands strictly inside it.
+  const rectUnits = panelUnits(dome)
+  const centroidOf = (ring: number[]) =>
+    ring.reduce(
+      (s, vi) => {
+        const p = dome.vertices[vi].position
+        return [s[0] + (p[0] * R) / ring.length, s[1] + (p[1] * R) / ring.length, s[2] + (p[2] * R) / ring.length]
+      },
+      [0, 0, 0],
+    )
+  const targetUnit = rectUnits.findIndex((u) => {
+    const c = centroidOf(u.ring)
+    const zRel = c[2] - dome.cutZ * R
+    return zRel > 40 && zRel < 90 && c[0] > 60
+  })
+  const cen = centroidOf(rectUnits[targetUnit].ring)
+  const az = Math.atan2(cen[1], cen[0])
+  const zc = cen[2]
+
+  /** Axis-aligned rect prism in the (t, z) frame at the facet's azimuth —
+   * OpeningPrism is plain data, so the literal needs no door machinery. */
+  const rectPrism = (id: string, tMin: number, tMax: number, zMin: number, zMax: number): OpeningPrism => ({
+    doorId: id,
+    ux: Math.cos(az),
+    uy: Math.sin(az),
+    z0: 0,
+    planes: [
+      { nt: 1, nz: 0, c: tMax },
+      { nt: -1, nz: 0, c: -tMin },
+      { nt: 0, nz: 1, c: zMax },
+      { nt: 0, nz: -1, c: -zMin },
+    ],
+    cutPlaneDist: 6,
+  })
+
+  const big = rectPrism('B', -8, 8, zc - 6, zc + 6)
+
+  const checkInvariants = (c: ReturnType<typeof clipPanels>[number], prisms: OpeningPrism[], digits: number) => {
+    expect(c.status).toBe('clipped')
+    const holes = c.loops.filter((l) => l.cut.every(Boolean))
+    for (let i = 0; i < holes.length; i++) {
+      for (let j = i + 1; j < holes.length; j++) {
+        expect(holeOverlapArea(holes[i].pts, holes[j].pts)).toBeLessThan(1e-6)
+      }
+    }
+    for (const loop of c.loops) assertLoopIntegrity(dome, R, rectUnits[c.unitIndex].ring, prisms, loop)
+    expect(signedLoopAreaSum(c.loops)).toBeCloseTo(c.area, digits)
+  }
+
+  it('found an interior-hole facet and the big rect is a clean hole in it', () => {
+    expect(targetUnit).toBeGreaterThanOrEqual(0)
+    const c = clipPanels(dome, R, [big])[targetUnit]
+    expect(c.status).toBe('clipped')
+    expect(c.loops).toHaveLength(2)
+    expect(c.loops.some((l) => l.cut.every(Boolean))).toBe(true)
+  })
+
+  it('a small rect exactly flush with its containing hole\'s edge keeps the full void (δ=0, both orders)', () => {
+    const small = rectPrism('S', 2, 8, zc - 3, zc + 3) // tMax flush with big's tMax
+    const results = [
+      clipPanels(dome, R, [big, small])[targetUnit],
+      clipPanels(dome, R, [small, big])[targetUnit],
+    ]
+    for (const c of results) checkInvariants(c, [big, small], 3)
+    expect(results[0].area).toBeCloseTo(results[1].area, 6)
+  })
+
+  it('hair-crossing sweep: the small rect poking out of the hole edge by δ ∈ [0, 3e-5] stays consistent (both orders)', () => {
+    for (const d of [0, 1e-9, 1e-7, 1e-6, 1e-5, 3e-5]) {
+      const small = rectPrism('S', 2, 8 + d, zc - 3, zc + 3)
+      for (const prisms of [[big, small], [small, big]]) {
+        const c = clipPanels(dome, R, prisms)[targetUnit]
+        // Slivers thinner than the loop grid (diameter·1e-4) quantize away —
+        // the residual is bounded by that grid, not by the opening's area
+        // (the round-3 bug lost the ENTIRE small opening, +33.6 in² here).
+        checkInvariants(c, prisms, 2)
+      }
+    }
+  })
+
+  it('a third window strictly inside an L-shaped hole remnant is not double-subtracted (all orders)', () => {
+    const partner = rectPrism('P', 2, 14, zc, zc + 10) // notches big's corner → L remnant
+    const third = rectPrism('T', -6, -1, zc - 4, zc + 1) // strictly inside the L, outside partner
+    const orders = [
+      [big, partner, third],
+      [big, third, partner],
+      [third, big, partner],
+      [partner, big, third],
+    ]
+    const areas: number[] = []
+    for (const prisms of orders) {
+      const c = clipPanels(dome, R, prisms)[targetUnit]
+      checkInvariants(c, prisms, 3)
+      // One outer loop, the L remnant, and the partner's own hole — the
+      // third window must NOT appear as an extra (redundant) hole loop.
+      expect(c.loops).toHaveLength(3)
+      expect(c.loops.filter((l) => l.cut.every(Boolean))).toHaveLength(2)
+      areas.push(c.area)
+    }
+    for (const a of areas) expect(a).toBeCloseTo(areas[0], 6)
   })
 })
 

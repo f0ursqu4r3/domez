@@ -131,30 +131,6 @@ interface TaggedFrag {
 
 type LoopWithArea = { pts2D: Pt2[]; tags: LineTag[]; signedArea: number }
 
-/** True when every point of `pts` lies inside (or within `eps` of the
- * boundary of) the convex CCW polygon `container` — a cheap convex
- * containment test (container's own edges give its inward half-planes
- * directly; no need for a generic clip). Used to catch a later prism
- * landing strictly inside an already-recorded hole, so its bite isn't
- * double-recorded as a second, redundant hole over already-void area. */
-function polygonContainsConvex(container: Pt2[], pts: Pt2[], eps: number): boolean {
-  const n = container.length
-  for (let i = 0; i < n; i++) {
-    const p = container[i]
-    const q = container[(i + 1) % n]
-    const dx = q[0] - p[0]
-    const dy = q[1] - p[1]
-    const len = Math.hypot(dx, dy) || 1
-    const A = dy / len
-    const B = -dx / len
-    const C = A * p[0] + B * p[1]
-    for (const pt of pts) {
-      if (A * pt[0] + B * pt[1] > C + eps) return false
-    }
-  }
-  return true
-}
-
 /** `f` with its point order (and per-edge tags) reversed — used to flip a
  * CCW piece to CW (a hole loop) or to flip a prism's "inside" bite before
  * splicing it into an outer loop as a bridge (see the "Loops" section of
@@ -554,19 +530,10 @@ function clipOneUnit(unit: PanelUnit, unitIndex: number, model: DomeModel, radiu
     isHole: boolean
   }
   let pieces: TrackedFrag[] = [{ pts: outline, tags: outline.map((_, i) => outlineTag(i)), isHole: false }]
-  const containEps = 1e-6 * diameter
   for (let ci = 0; ci < candidates.length; ci++) {
     const planeSet = candidates[ci]
     const ownPrefix = `p:${ci}:`
-    // Existing holes as of *before* this candidate — a non-touching bite
-    // found against a fresh (non-hole) piece only earns a new hole entry if
-    // it isn't already entirely accounted for by one of these. Snapshotting
-    // them here (rather than re-deriving from `nextPieces`, which this
-    // candidate is still building) means a piece this same candidate
-    // notched down doesn't retroactively suppress its own new hole.
-    const existingHoles = pieces.filter((p) => p.isHole)
-    const nextPieces: TrackedFrag[] = []
-    for (const piece of pieces) {
+    const biteOf = (piece: TaggedFrag): TaggedFrag => {
       let bite: TaggedFrag = piece
       for (let pj = 0; pj < planeSet.length; pj++) {
         const pl = planeSet[pj]
@@ -574,7 +541,47 @@ function clipOneUnit(unit: PanelUnit, unitIndex: number, model: DomeModel, radiu
         bite = clipHalfPlaneTagged(bite.pts, bite.tags, pl.A, pl.B, pl.C, eps, prismTag(ci, pj))
         if (bite.pts.length < 3) break
       }
-      if (bite.pts.length < 3 || Math.abs(area2(bite.pts)) < areaFloor) {
+      return bite
+    }
+    // Every existing hole's bite by this prism, computed ONCE (from the
+    // pre-candidate `pieces` snapshot, so a piece this same candidate
+    // reshapes can't retroactively suppress its own fresh hole) by the
+    // exact same sequential clip used for every piece below. The SAME bite
+    // object then drives both decisions that must never disagree:
+    //   1. whether the hole itself gets notched (its bite touches the
+    //      hole's own boundary — some tag isn't this prism's), and
+    //   2. whether a fresh (non-hole) piece's non-touching bite is
+    //      suppressed as already-void (`swallowsBite`): some hole's bite is
+    //      non-touching (all edges on this prism's own planes) AND
+    //      area-equal to the fresh bite within the area floor.
+    // Using one oracle for both sides closes the two failure modes a
+    // separate geometric containment test had: a prism boundary flush with
+    // (or hair-crossing) the hole's boundary resolved as "contained" under
+    // the containment epsilon while the tags said "touching" — silently
+    // deleting the opening's area from the void — and an L-shaped hole
+    // (notched non-convex by a partner prism) failed a convex-only
+    // containment test outright, re-recording a fully-void bite as a
+    // second hole (double-subtraction). Non-touching + area-equal is
+    // convexity-agnostic: sequential half-plane clipping of a non-convex
+    // hole stays area-correct (any bowtie bridge edges lie on this prism's
+    // own clip lines with zero net area), and a bite that genuinely pokes
+    // outside the hole necessarily keeps a stretch of the hole's boundary,
+    // i.e. a non-own tag.
+    const holeBites = new Map<TrackedFrag, TaggedFrag>()
+    for (const p of pieces) if (p.isHole) holeBites.set(p, biteOf(p))
+    const swallowsBite = (biteArea: number): boolean => {
+      for (const hb of holeBites.values()) {
+        if (hb.pts.length < 3) continue
+        if (hb.tags.some((t) => !t.startsWith(ownPrefix))) continue
+        if (Math.abs(Math.abs(area2(hb.pts)) - biteArea) < areaFloor) return true
+      }
+      return false
+    }
+    const nextPieces: TrackedFrag[] = []
+    for (const piece of pieces) {
+      const bite = piece.isHole ? holeBites.get(piece)! : biteOf(piece)
+      const biteArea = bite.pts.length < 3 ? 0 : Math.abs(area2(bite.pts))
+      if (biteArea < areaFloor) {
         nextPieces.push(piece)
         continue
       }
@@ -583,13 +590,11 @@ function clipOneUnit(unit: PanelUnit, unitIndex: number, model: DomeModel, radiu
         nextPieces.push(piece)
         // A non-touching bite off a fresh piece is normally a brand-new
         // hole — UNLESS this exact area is already void: a later prism
-        // strictly inside an earlier hole (e.g. a small window re-drawn
-        // inside a bigger one already removed) clips to a bite entirely
-        // contained in that hole. Recording it again would double-subtract
-        // area a hole-side check elsewhere already discards as redundant
-        // (see the `piece.isHole` branch just above — this is its mirror
-        // for the non-hole side).
-        if (!piece.isHole && !existingHoles.some((h) => polygonContainsConvex(h.pts, bite.pts, containEps))) {
+        // strictly inside an earlier hole (convex or L-shaped) clips to a
+        // bite some hole's own bite matches exactly (see `swallowsBite`
+        // above). Recording it again would double-subtract area the
+        // hole-side branch just above discards as redundant.
+        if (!piece.isHole && !swallowsBite(biteArea)) {
           nextPieces.push({ ...bite, isHole: true })
         }
         continue

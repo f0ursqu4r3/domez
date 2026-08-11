@@ -49,6 +49,18 @@ export interface ClippedPanel {
 
 type Pt2 = [number, number]
 
+/** Identifies the single fixed 2D line an edge lies on: either the original
+ * panel outline's edge `i`, or candidate prism `c`'s half-plane `j`. Edges
+ * sharing a tag are, by construction, exactly collinear (they're sub-pieces
+ * of the same clip line reused across several fragments) — this lets loop
+ * reconstruction resolve T-junctions exactly instead of guessing from
+ * coordinates, and lets the cut flag be read off the tag directly instead
+ * of a distance test. */
+type LineTag = string
+const outlineTag = (i: number): LineTag => `o:${i}`
+const prismTag = (c: number, j: number): LineTag => `p:${c}:${j}`
+const isPrismTag = (t: LineTag): boolean => t.charCodeAt(0) === 112 // 'p'
+
 /** Signed area of a planar polygon in local (s1, s2) coordinates (Shoelace). */
 function area2(poly: Pt2[]): number {
   let a = 0
@@ -62,11 +74,24 @@ function area2(poly: Pt2[]): number {
 }
 
 /** Sutherland–Hodgman clip of a convex polygon against the half-plane
- * `A·x + B·y ≤ C + eps`. */
-function clipHalfPlane(poly: Pt2[], A: number, B: number, C: number, eps: number): Pt2[] {
+ * `A·x + B·y ≤ C + eps`, carrying a parallel tag array (`tags[i]` = the tag
+ * of the edge `poly[i] → poly[i+1]`). A surviving vertex keeps its
+ * incoming edge's tag; the one new bridging edge introduced by this clip
+ * (from the exit intersection to the entry intersection) is tagged
+ * `newTag`. */
+function clipHalfPlaneTagged(
+  poly: Pt2[],
+  tags: LineTag[],
+  A: number,
+  B: number,
+  C: number,
+  eps: number,
+  newTag: LineTag,
+): { pts: Pt2[]; tags: LineTag[] } {
   const n = poly.length
-  if (n === 0) return []
-  const out: Pt2[] = []
+  if (n === 0) return { pts: [], tags: [] }
+  const pts: Pt2[] = []
+  const outTags: LineTag[] = []
   for (let i = 0; i < n; i++) {
     const a = poly[i]
     const b = poly[(i + 1) % n]
@@ -74,13 +99,17 @@ function clipHalfPlane(poly: Pt2[], A: number, B: number, C: number, eps: number
     const db = A * b[0] + B * b[1] - C
     const aIn = da <= eps
     const bIn = db <= eps
-    if (aIn) out.push(a)
+    if (aIn) {
+      pts.push(a)
+      outTags.push(tags[i])
+    }
     if (aIn !== bIn) {
       const t = da / (da - db)
-      out.push([a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t])
+      pts.push([a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t])
+      outTags.push(aIn ? newTag : tags[i])
     }
   }
-  return out
+  return { pts, tags: outTags }
 }
 
 /** A prism's cut region as 2D half-planes on one panel's plane (`A·s1 +
@@ -95,11 +124,201 @@ interface Plane2 {
   norm: number
 }
 
-interface DirEdge {
-  a: Pt2
-  b: Pt2
-  aKey: string
-  bKey: string
+interface TaggedFrag {
+  pts: Pt2[]
+  tags: LineTag[]
+}
+
+type LoopWithArea = { pts2D: Pt2[]; tags: LineTag[]; signedArea: number }
+
+/** `f` with its point order (and per-edge tags) reversed — used to flip a
+ * CCW piece to CW (a hole loop) or to flip a prism's "inside" bite before
+ * splicing it into an outer loop as a bridge (see the "Loops" section of
+ * `clipOneUnit`: a bite computed by the normal "inside" convention shares
+ * its overlapping tags with `region` in the SAME direction, which cancels
+ * correctly, but its own brand-new bridge edges then point the wrong way
+ * to close the spliced loop — reversing the whole bite first fixes both at
+ * once). */
+function reverseTaggedFrag(f: TaggedFrag): TaggedFrag {
+  const n = f.pts.length
+  const pts = f.pts.slice().reverse()
+  const tags: LineTag[] = new Array(n)
+  for (let i = 0; i < n; i++) tags[i] = f.tags[(n - 2 - i + n) % n]
+  return { pts, tags }
+}
+
+/** Rebuild simple boundary loops from the tagged fragment set produced by
+ * the convex-difference decomposition. Adjacent fragments can share only a
+ * *partial* stretch of a common clip line (a T-junction: one fragment's
+ * edge is the full clip-line segment, a neighbor's is a sub-range of it),
+ * so naive "cancel exact-duplicate edges" leaves an unpaired remainder that
+ * naive angle-disambiguated chaining weaves into a self-touching loop.
+ * Fixed by first splitting every group of same-tag edges (which are, by
+ * construction, exactly collinear — the tag names the one fixed line) at
+ * the union of their endpoints, so any overlap becomes a run of exactly
+ * matching sub-edges that cancel cleanly. What's left has degree ≤ 2 at
+ * every vertex in the overwhelming common case; angular disambiguation
+ * (tightest right turn) is kept only as a tie-breaker for the rare exact
+ * coincidence of an outline vertex landing on a prism boundary, and a
+ * repeated-vertex guard turns any remaining ambiguity into a loud failure
+ * instead of a silently self-intersecting loop. */
+function buildLoopsFromFragments(fragments: TaggedFrag[], diameter: number, areaFloor: number): LoopWithArea[] {
+  interface TagEdge {
+    a: Pt2
+    b: Pt2
+    tag: LineTag
+  }
+  const rawEdges: TagEdge[] = []
+  for (const frag of fragments) {
+    const n2 = frag.pts.length
+    for (let i = 0; i < n2; i++) {
+      rawEdges.push({ a: frag.pts[i], b: frag.pts[(i + 1) % n2], tag: frag.tags[i] })
+    }
+  }
+
+  const grid = diameter * 1e-4
+
+  // ---- Resolve T-junctions per shared tag ----
+  const byTag = new Map<LineTag, TagEdge[]>()
+  for (const e of rawEdges) {
+    const list = byTag.get(e.tag)
+    if (list) list.push(e)
+    else byTag.set(e.tag, [e])
+  }
+  const splitEdges: TagEdge[] = []
+  for (const edges of byTag.values()) {
+    if (edges.length === 1) {
+      const [a, b] = [edges[0].a, edges[0].b]
+      if (Math.hypot(b[0] - a[0], b[1] - a[1]) >= grid * 0.5) splitEdges.push(edges[0])
+      continue
+    }
+    const ref = edges[0]
+    const dx = ref.b[0] - ref.a[0]
+    const dy = ref.b[1] - ref.a[1]
+    const dl = Math.hypot(dx, dy) || 1
+    const dirX = dx / dl
+    const dirY = dy / dl
+    const origin = ref.a
+    const paramOf = (p: Pt2) => (p[0] - origin[0]) * dirX + (p[1] - origin[1]) * dirY
+    const roundParam = (t: number) => Math.round(t / grid) * grid
+    const pointAtParam = (t: number): Pt2 => [origin[0] + t * dirX, origin[1] + t * dirY]
+    // Every breakpoint is, by construction, some edge's own actual endpoint
+    // (we only ever add e.a/e.b below) — map each rounded param to that
+    // ORIGINAL point object (first one seen) so a breakpoint contributed by
+    // edge Y's endpoint is reused bit-exact when it falls in the *interior*
+    // of edge X's span too, instead of being re-synthesized from X's own
+    // parametrization and drifting a rounding bucket away from Y's copy.
+    const paramToPoint = new Map<number, Pt2>()
+    for (const e of edges) {
+      const ta = roundParam(paramOf(e.a))
+      const tb = roundParam(paramOf(e.b))
+      if (!paramToPoint.has(ta)) paramToPoint.set(ta, e.a)
+      if (!paramToPoint.has(tb)) paramToPoint.set(tb, e.b)
+    }
+    const sortedParams = [...paramToPoint.keys()].sort((x, y) => x - y)
+    for (const e of edges) {
+      const ta = roundParam(paramOf(e.a))
+      const tb = roundParam(paramOf(e.b))
+      const lo = Math.min(ta, tb)
+      const hi = Math.max(ta, tb)
+      const within = sortedParams.filter((t) => t >= lo - 1e-9 && t <= hi + 1e-9)
+      const ordered = ta <= tb ? within : within.slice().reverse()
+      for (let k = 0; k < ordered.length - 1; k++) {
+        const pA = paramToPoint.get(ordered[k]) ?? pointAtParam(ordered[k])
+        const pB = paramToPoint.get(ordered[k + 1]) ?? pointAtParam(ordered[k + 1])
+        if (Math.hypot(pB[0] - pA[0], pB[1] - pA[1]) < grid * 0.5) continue
+        splitEdges.push({ a: pA, b: pB, tag: e.tag })
+      }
+    }
+  }
+
+  // ---- Cancel exact-duplicate edges (both endpoint keys equal, either
+  // order) — genuine internal decomposition seams, now that T-junctions
+  // are resolved into matching sub-edges. ----
+  interface KeyedEdge extends TagEdge {
+    aKey: string
+    bKey: string
+  }
+  const keyOf = (p: Pt2) => `${Math.round(p[0] / grid)}:${Math.round(p[1] / grid)}`
+  const edgeGroups = new Map<string, KeyedEdge[]>()
+  for (const e of splitEdges) {
+    const aKey = keyOf(e.a)
+    const bKey = keyOf(e.b)
+    if (aKey === bKey) continue
+    const undirected = aKey < bKey ? `${aKey}|${bKey}` : `${bKey}|${aKey}`
+    const keyed: KeyedEdge = { ...e, aKey, bKey }
+    const list = edgeGroups.get(undirected)
+    if (list) list.push(keyed)
+    else edgeGroups.set(undirected, [keyed])
+  }
+  const survivingEdges: KeyedEdge[] = []
+  for (const [key, list] of edgeGroups) {
+    if (list.length === 1) survivingEdges.push(list[0])
+    else if (list.length === 2) continue
+    else throw new Error(`panelClip: boundary edge ${key} appears ${list.length} times (expected 1 or 2)`)
+  }
+
+  const outMap = new Map<string, KeyedEdge[]>()
+  for (const e of survivingEdges) {
+    const list = outMap.get(e.aKey)
+    if (list) list.push(e)
+    else outMap.set(e.aKey, [e])
+  }
+
+  const pickNext = (incoming: KeyedEdge, cands: KeyedEdge[]): KeyedEdge => {
+    if (cands.length === 1) return cands[0]
+    const inAngle = Math.atan2(incoming.b[1] - incoming.a[1], incoming.b[0] - incoming.a[0])
+    const refAngle = inAngle + Math.PI
+    let best = cands[0]
+    let bestDelta = Infinity
+    for (const c of cands) {
+      const outAngle = Math.atan2(c.b[1] - c.a[1], c.b[0] - c.a[0])
+      let delta = outAngle - refAngle
+      delta = ((delta % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI)
+      if (delta < bestDelta) {
+        bestDelta = delta
+        best = c
+      }
+    }
+    return best
+  }
+
+  const usedEdges = new Set<KeyedEdge>()
+  const rawLoops: KeyedEdge[][] = []
+  for (const startEdge of survivingEdges) {
+    if (usedEdges.has(startEdge)) continue
+    const loopEdges: KeyedEdge[] = [startEdge]
+    usedEdges.add(startEdge)
+    const visited = new Set<string>([startEdge.aKey])
+    let current = startEdge
+    let guard = 0
+    while (true) {
+      const pool = outMap.get(current.bKey) ?? []
+      const cands = pool.filter((e) => e === startEdge || !usedEdges.has(e))
+      if (cands.length === 0) throw new Error('panelClip: loop failed to close')
+      const next = pickNext(current, cands)
+      if (next === startEdge) break
+      if (visited.has(next.aKey)) {
+        throw new Error('panelClip: loop is not simple (revisits a vertex)')
+      }
+      visited.add(next.aKey)
+      usedEdges.add(next)
+      loopEdges.push(next)
+      current = next
+      guard++
+      if (guard > survivingEdges.length + 4) throw new Error('panelClip: loop failed to close')
+    }
+    if (current.bKey !== startEdge.aKey) throw new Error('panelClip: loop failed to close')
+    rawLoops.push(loopEdges)
+  }
+
+  return rawLoops
+    .map((edges) => {
+      const pts2D = edges.map((e) => e.a)
+      const tags = edges.map((e) => e.tag)
+      return { pts2D, tags, signedArea: area2(pts2D) }
+    })
+    .filter((l) => Math.abs(l.signedArea) >= areaFloor)
 }
 
 /** Per-panel-unit clip. Isolated from `clipPanels` so the outer function
@@ -156,6 +375,19 @@ function clipOneUnit(unit: PanelUnit, unitIndex: number, model: DomeModel, radiu
     cen[1] + s[0] * e1[1] + s[1] * e2[1],
     cen[2] + s[0] * e1[2] + s[1] * e2[2],
   ]
+
+  const wholeResult = (): ClippedPanel => {
+    const pts = outline.map(toWorld)
+    return {
+      unitIndex,
+      ring,
+      faceIds: unit.faceIds,
+      status: 'whole',
+      fragments: [pts],
+      loops: [{ pts, cut: pts.map(() => false) }],
+      area: origArea,
+    }
+  }
 
   let diameter = 0
   for (let i = 0; i < nV; i++) {
@@ -226,232 +458,90 @@ function clipOneUnit(unit: PanelUnit, unitIndex: number, model: DomeModel, radiu
     candidates.push(planes2)
   }
 
-  if (candidates.length === 0) {
-    const pts = outline.map(toWorld)
-    return {
-      unitIndex,
-      ring,
-      faceIds: unit.faceIds,
-      status: 'whole',
-      fragments: [pts],
-      loops: [{ pts, cut: pts.map(() => false) }],
-      area: origArea,
-    }
-  }
+  if (candidates.length === 0) return wholeResult()
 
   // ---- Convex-difference decomposition: for each prism's half-planes
   // H_0..H_K, each current fragment F splits into F∩H̄_j∩H_0..j-1 (kept,
   // outside the prism) for j = 0..K, and the final F∩H_0..H_K (fully
-  // inside the prism) is discarded. ----
+  // inside the prism) is discarded. Each fragment carries a parallel tag
+  // per edge identifying which fixed line (an original outline edge, or a
+  // specific prism half-plane) it lies on — see `buildLoopsFromFragments`
+  // for why. ----
   const REL_EPS = 1e-9
   const areaFloor = origArea * 1e-6
-  let fragments: Pt2[][] = [outline]
+  let fragments: TaggedFrag[] = [{ pts: outline, tags: outline.map((_, i) => outlineTag(i)) }]
 
-  for (const planeSet of candidates) {
-    const next: Pt2[][] = []
+  for (let ci = 0; ci < candidates.length; ci++) {
+    const planeSet = candidates[ci]
+    const next: TaggedFrag[] = []
     for (const frag of fragments) {
       let remaining = frag
-      for (const pl of planeSet) {
+      for (let pj = 0; pj < planeSet.length; pj++) {
+        const pl = planeSet[pj]
         const eps = REL_EPS * diameter * pl.norm
-        const outside = clipHalfPlane(remaining, -pl.A, -pl.B, -pl.C, eps)
-        if (outside.length >= 3 && Math.abs(area2(outside)) >= areaFloor) next.push(outside)
-        remaining = clipHalfPlane(remaining, pl.A, pl.B, pl.C, eps)
-        if (remaining.length < 3) break
+        const tag = prismTag(ci, pj)
+        const outside = clipHalfPlaneTagged(remaining.pts, remaining.tags, -pl.A, -pl.B, -pl.C, eps, tag)
+        if (outside.pts.length >= 3 && Math.abs(area2(outside.pts)) >= areaFloor) next.push(outside)
+        remaining = clipHalfPlaneTagged(remaining.pts, remaining.tags, pl.A, pl.B, pl.C, eps, tag)
+        if (remaining.pts.length < 3) break
       }
     }
     fragments = next
   }
 
-  const totalArea = fragments.reduce((s, f) => s + Math.abs(area2(f)), 0)
-
-  type LoopWithArea = { pts2D: Pt2[]; cut: boolean[]; signedArea: number }
-
-  // ---- General fallback: chain surviving fragment edges by rounded
-  // endpoint key, canceling exact-duplicate edges (internal decomposition
-  // seams), for panels where a prism's cut region touches the original
-  // outline (a genuine boundary notch, not a self-contained hole). ----
-  function buildLoopsFromFragments(): LoopWithArea[] {
-    const grid = diameter * 1e-4
-    const keyOf = (p: Pt2) => `${Math.round(p[0] / grid)}:${Math.round(p[1] / grid)}`
-
-    const edgeGroups = new Map<string, DirEdge[]>()
-    for (const frag of fragments) {
-      const n2 = frag.length
-      for (let i = 0; i < n2; i++) {
-        const a = frag[i]
-        const b = frag[(i + 1) % n2]
-        const aKey = keyOf(a)
-        const bKey = keyOf(b)
-        if (aKey === bKey) continue
-        const undirected = aKey < bKey ? `${aKey}|${bKey}` : `${bKey}|${aKey}`
-        const list = edgeGroups.get(undirected)
-        if (list) list.push({ a, b, aKey, bKey })
-        else edgeGroups.set(undirected, [{ a, b, aKey, bKey }])
-      }
-    }
-
-    const survivingEdges: DirEdge[] = []
-    for (const [key, list] of edgeGroups) {
-      if (list.length === 1) survivingEdges.push(list[0])
-      else if (list.length === 2) continue
-      else throw new Error(`panelClip: boundary edge ${key} appears ${list.length} times (expected 1 or 2)`)
-    }
-
-    const outMap = new Map<string, DirEdge[]>()
-    for (const e of survivingEdges) {
-      const list = outMap.get(e.aKey)
-      if (list) list.push(e)
-      else outMap.set(e.aKey, [e])
-    }
-
-    // Several surviving edges can end at the same rounded point (e.g. a hole
-    // vertex that also sits on the original outline, where the decomposition
-    // leaves a 4-way branch). Disambiguate by turning angle: coming in along
-    // `incoming`, take the outgoing edge that requires the smallest
-    // counterclockwise rotation from the reversed incoming direction (the
-    // tightest right turn) — the standard rule for tracing a single boundary
-    // component out of a set of CCW-oriented fragment edges.
-    const pickNext = (incoming: DirEdge, cands: DirEdge[]): DirEdge => {
-      if (cands.length === 1) return cands[0]
-      const inAngle = Math.atan2(incoming.b[1] - incoming.a[1], incoming.b[0] - incoming.a[0])
-      const refAngle = inAngle + Math.PI
-      let best = cands[0]
-      let bestDelta = Infinity
-      for (const c of cands) {
-        const outAngle = Math.atan2(c.b[1] - c.a[1], c.b[0] - c.a[0])
-        let delta = outAngle - refAngle
-        delta = ((delta % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI)
-        if (delta < bestDelta) {
-          bestDelta = delta
-          best = c
-        }
-      }
-      return best
-    }
-
-    const usedEdges = new Set<DirEdge>()
-    const rawLoops: DirEdge[][] = []
-    for (const startEdge of survivingEdges) {
-      if (usedEdges.has(startEdge)) continue
-      const loopEdges: DirEdge[] = [startEdge]
-      usedEdges.add(startEdge)
-      let current = startEdge
-      let guard = 0
-      while (true) {
-        const pool = outMap.get(current.bKey) ?? []
-        const cands = pool.filter((e) => e === startEdge || !usedEdges.has(e))
-        if (cands.length === 0) throw new Error('panelClip: loop failed to close')
-        const next = pickNext(current, cands)
-        if (next === startEdge) break
-        usedEdges.add(next)
-        loopEdges.push(next)
-        current = next
-        guard++
-        if (guard > survivingEdges.length + 4) throw new Error('panelClip: loop failed to close')
-      }
-      if (current.bKey !== startEdge.aKey) throw new Error('panelClip: loop failed to close')
-      rawLoops.push(loopEdges)
-    }
-
-    // A loop edge is 'cut' when its midpoint lies on some prism's 2D
-    // half-plane boundary AND inside that prism's other half-planes — i.e.
-    // it borders the removed region.
-    const cutEps = 1e-6 * diameter
-    const isCutEdge = (e: DirEdge): boolean => {
-      const mx = (e.a[0] + e.b[0]) / 2
-      const my = (e.a[1] + e.b[1]) / 2
-      for (const planeSet of candidates) {
-        for (let j = 0; j < planeSet.length; j++) {
-          const pj = planeSet[j]
-          const distJ = (pj.A * mx + pj.B * my - pj.C) / pj.norm
-          if (Math.abs(distJ) >= cutEps) continue
-          let insideOthers = true
-          for (let k = 0; k < planeSet.length; k++) {
-            if (k === j) continue
-            const pk = planeSet[k]
-            const distK = (pk.A * mx + pk.B * my - pk.C) / pk.norm
-            if (distK > cutEps) {
-              insideOthers = false
-              break
-            }
-          }
-          if (insideOthers) return true
-        }
-      }
-      return false
-    }
-
-    // Branch-point disambiguation (picking the tightest-turn continuation at
-    // a vertex where several fragments meet) occasionally closes off a
-    // degenerate near-zero-area sliver instead of continuing through it —
-    // floating-point noise, not real geometry. Drop those before reporting.
-    return rawLoops
-      .map((edges) => {
-        const pts2D = edges.map((e) => e.a)
-        const cut = edges.map(isCutEdge)
-        return { pts2D, cut, signedArea: area2(pts2D) }
-      })
-      .filter((l) => Math.abs(l.signedArea) >= areaFloor)
-  }
+  const totalArea = fragments.reduce((s, f) => s + Math.abs(area2(f.pts)), 0)
 
   // ---- Loops ----
-  // Fast, exact path first: if every candidate's cut region sits fully
-  // interior to the panel (never touching the original outline), each one
-  // is a clean hole — outer loop is the untouched outline, one hole loop
-  // per prism. This is the common "opening lands inside one panel" case,
-  // and sidesteps the general edge-soup reconstruction below (which, once
-  // several prism half-planes fan out from an interior point, has enough
-  // coincident branch vertices that naive chaining can misroute).
-  const touchEps = 1e-6 * diameter
-  const pointNearSegment = (p: Pt2, a: Pt2, b: Pt2, eps: number): boolean => {
-    const dx = b[0] - a[0]
-    const dy = b[1] - a[1]
-    const len2 = dx * dx + dy * dy
-    if (len2 < 1e-18) return Math.hypot(p[0] - a[0], p[1] - a[1]) < eps
-    const t = Math.max(0, Math.min(1, ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / len2))
-    const cx = a[0] + t * dx
-    const cy = a[1] + t * dy
-    return Math.hypot(p[0] - cx, p[1] - cy) < eps
-  }
-  const pointOnOutline = (p: Pt2): boolean => {
-    const n2 = outline.length
-    for (let i = 0; i < n2; i++) {
-      if (pointNearSegment(p, outline[i], outline[(i + 1) % n2], touchEps)) return true
+  // Not derived from the fragment wedge fan above (see `buildLoopsFromFragments`'s
+  // doc comment on why that's fragile once a prism has many sides): instead,
+  // walk the candidates one at a time against the current set of surviving
+  // regions (starting from just the outline). For each region, `bite` =
+  // region ∩ this one prism, computed as a single sequential half-plane
+  // clip (never decomposed into wedges). If `bite` never touches the
+  // region's own boundary it's a clean interior hole; otherwise splice
+  // region and (reversed) bite together through the same T-junction-aware
+  // reconstruction, which — fed only these two clean polygons instead of a
+  // multi-generation wedge soup — naturally yields one notched region, or
+  // several if the bite happens to cut all the way through (a genuine
+  // split), via its per-loop "unvisited start edge" chaining.
+  let regions: TaggedFrag[] = [{ pts: outline, tags: outline.map((_, i) => outlineTag(i)) }]
+  const holes: TaggedFrag[] = []
+  for (let ci = 0; ci < candidates.length; ci++) {
+    const planeSet = candidates[ci]
+    const ownPrefix = `p:${ci}:`
+    const nextRegions: TaggedFrag[] = []
+    for (const region of regions) {
+      let bite: TaggedFrag = region
+      for (let pj = 0; pj < planeSet.length; pj++) {
+        const pl = planeSet[pj]
+        const eps = REL_EPS * diameter * pl.norm
+        bite = clipHalfPlaneTagged(bite.pts, bite.tags, pl.A, pl.B, pl.C, eps, prismTag(ci, pj))
+        if (bite.pts.length < 3) break
+      }
+      if (bite.pts.length < 3 || Math.abs(area2(bite.pts)) < areaFloor) {
+        nextRegions.push(region)
+        continue
+      }
+      const touchesBoundary = bite.tags.some((t) => !t.startsWith(ownPrefix))
+      if (!touchesBoundary) {
+        nextRegions.push(region)
+        holes.push(bite)
+        continue
+      }
+      const pieces = buildLoopsFromFragments([region, reverseTaggedFrag(bite)], diameter, areaFloor)
+      for (const piece of pieces) nextRegions.push({ pts: piece.pts2D, tags: piece.tags })
     }
-    return false
+    regions = nextRegions
   }
 
-  let anyTouch = false
-  const holeCandidates: Pt2[][] = []
-  for (const planeSet of candidates) {
-    let bite: Pt2[] = outline
-    for (const pl of planeSet) {
-      const eps = REL_EPS * diameter * pl.norm
-      bite = clipHalfPlane(bite, pl.A, pl.B, pl.C, eps)
-      if (bite.length < 3) break
-    }
-    if (bite.length < 3 || Math.abs(area2(bite)) < areaFloor) continue
-    if (bite.some((p) => pointOnOutline(p))) {
-      anyTouch = true
-      break
-    }
-    holeCandidates.push(bite)
-  }
-
-  let loopsWithArea: LoopWithArea[]
-
-  if (!anyTouch) {
-    const outer: LoopWithArea = { pts2D: outline, cut: outline.map(() => false), signedArea: origArea }
-    const holes: LoopWithArea[] = holeCandidates.map((bite) => {
-      const rev = bite.slice().reverse()
-      return { pts2D: rev, cut: rev.map(() => true), signedArea: area2(rev) }
-    })
-    loopsWithArea = [outer, ...holes]
-  } else {
-    loopsWithArea = buildLoopsFromFragments()
-  }
+  const loopsWithArea: LoopWithArea[] = [...regions, ...holes.map(reverseTaggedFrag)]
+    .map((f) => ({ pts2D: f.pts, tags: f.tags, signedArea: area2(f.pts) }))
+    .filter((l) => Math.abs(l.signedArea) >= areaFloor)
   loopsWithArea.sort((a, b) => Math.abs(b.signedArea) - Math.abs(a.signedArea))
-  const loops: ClippedLoop[] = loopsWithArea.map((l) => ({ pts: l.pts2D.map(toWorld), cut: l.cut }))
+  const loops: ClippedLoop[] = loopsWithArea.map((l) => ({
+    pts: l.pts2D.map(toWorld),
+    cut: l.tags.map(isPrismTag),
+  }))
 
   const anyCut = loops.some((l) => l.cut.some(Boolean))
   let status: 'whole' | 'clipped' | 'removed'
@@ -459,12 +549,19 @@ function clipOneUnit(unit: PanelUnit, unitIndex: number, model: DomeModel, radiu
   else if (totalArea >= (1 - 1e-9) * origArea && !anyCut) status = 'whole'
   else status = 'clipped'
 
+  // A candidate prism can pass the fast-reject filter without actually
+  // removing anything usable (e.g. it only shaves off a sliver thinner
+  // than the area floor) — the contract is that 'whole' always reports
+  // exactly one fragment, the original ring, not whatever partial wedge
+  // partition the decomposition happened to leave lying around.
+  if (status === 'whole') return wholeResult()
+
   return {
     unitIndex,
     ring,
     faceIds: unit.faceIds,
     status,
-    fragments: fragments.map((f) => f.map(toWorld)),
+    fragments: fragments.map((f) => f.pts.map(toWorld)),
     loops,
     area: totalArea,
   }

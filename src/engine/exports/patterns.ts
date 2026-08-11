@@ -112,6 +112,41 @@ export function panelPatternsSvg(plan: PanelPlan, opts: PatternOptions): string 
     })
   }
 
+  // Opening-clipped, one-off site-fit skin pieces: unlike the grouped
+  // families above, each is a unique shape cut once (count is always 1),
+  // so its hint calls that out instead of a per-sheet nesting count, and
+  // its outline renders with any opening-carved holes as inner polygons —
+  // same shape data `panelsCsv`'s clipped rows already draw their numbers
+  // from (see `exports/csv.ts`), just rendered instead of tabulated.
+  const areaUnit = opts.units === 'imperial' ? 'ft²' : 'm²'
+  const areaOf = (a: number) => (opts.units === 'imperial' ? a / 144 : a / 1e6)
+  for (const c of plan.clipped) {
+    pages.push({
+      label: c.label,
+      count: 1,
+      hint: `site-fit — ${areaOf(c.trueArea).toFixed(2)} ${areaUnit}${c.seamed ? ', seamed — too large for one sheet' : ''}`,
+      w: c.bboxW,
+      h: c.bboxH,
+      render: (ox, oy, s, push) => {
+        const pts = c.outline.map(([x, y]) => [ox + x * s, oy + y * s])
+        push(`<path class="outline" d="M ${pts.map((p) => p.join(' ')).join(' L ')} Z"/>`)
+        const n = pts.length
+        for (let i = 0; i < n; i++) {
+          const p = c.outline[i]
+          const q = c.outline[(i + 1) % n]
+          const mx = ox + ((p[0] + q[0]) / 2) * s
+          const my = oy + ((p[1] + q[1]) / 2) * s
+          const len = Math.hypot(q[0] - p[0], q[1] - p[1])
+          push(`<text x="${mx}" y="${my - fs * 0.3}" class="lbl">${esc(fmt(len))}</text>`)
+        }
+        for (const hole of c.holes) {
+          const hPts = hole.map(([x, y]) => [ox + x * s, oy + y * s])
+          push(`<path class="outline dim" d="M ${hPts.map((p) => p.join(' ')).join(' L ')} Z"/>`)
+        }
+      },
+    })
+  }
+
   for (const g of plan.polys) {
     pages.push({
       label: g.label,

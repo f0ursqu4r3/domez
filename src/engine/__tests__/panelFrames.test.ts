@@ -12,6 +12,7 @@ import { planPanels } from '../panels'
 import { cutListCsv, framesCsv } from '../exports/csv'
 import { frameJigsSvg } from '../exports/frames'
 import { optimizeDiameter } from '../optimize'
+import type { DomeModel } from '../types'
 
 // Match the exact generator/param call shapes used in engine.test.ts, and
 // the actual empty-doorway helper name exported by doorway.ts (grep for the
@@ -406,4 +407,111 @@ describe('panel frames: clip-driven X-types + overlap seams', () => {
     )
     expect(plan.totalMembers).toBe(expectedTotalMembers)
   })
+
+  it('framed cut list drops trimmed rows even with a doorway; carries X-member rows', () => {
+    const dome = generateDome({ frequency: 3, fraction: '1/2', baseMode: 'leveled' })
+    const cut = cutDoorways(dome, [archDoor], R, { minStubLength: 6 })
+    const prisms = openingPrisms(dome, [archDoor], R, { minStubLength: 6 })
+    const clips = clipPanels(dome, R, prisms)
+    const plan = buildPanelFrames(dome, R, 'imperial', cut, clips)
+    expect(plan.types.some((t) => t.siteFit)).toBe(true)
+
+    const list = buildCutList(
+      dome,
+      { radius: R, increment: 1 / 8, endOffset: 0, units: 'imperial', jointId: 'framed-panel' },
+      cut,
+      null,
+      plan,
+    )
+    expect(list.rows.some((r) => r.kind === 'trimmed')).toBe(false)
+    expect(list.rows.some((r) => r.label.startsWith('X1'))).toBe(true)
+  })
+
+  it('hub-mode cut list still carries trimmed rows with the same doorway', () => {
+    const dome = generateDome({ frequency: 3, fraction: '1/2', baseMode: 'leveled' })
+    const cut = cutDoorways(dome, [archDoor], R, { minStubLength: 6 })
+    const list = buildCutList(
+      dome,
+      { radius: R, increment: 1 / 8, endOffset: 2, units: 'imperial', jointId: 'hub' },
+      cut,
+    )
+    expect(list.rows.some((r) => r.kind === 'trimmed')).toBe(true)
+  })
+
+  it('jig svg draws X-types with data-cut-edge marking their opening-interface members', () => {
+    const dome = generateDome({ frequency: 3, fraction: '1/2', baseMode: 'leveled' })
+    const cut = cutDoorways(dome, [archDoor], R, { minStubLength: 6 })
+    const prisms = openingPrisms(dome, [archDoor], R, { minStubLength: 6 })
+    const clips = clipPanels(dome, R, prisms)
+    const plan = buildPanelFrames(dome, R, 'imperial', cut, clips)
+
+    const svg = frameJigsSvg(plan, 'imperial', 'DOMEZ test')
+    expect(svg).toContain('X1')
+    expect(svg).toContain('data-cut-edge')
+    expect(svg).toContain('site-fit — cut edges marked')
+
+    // Every member flagged cutEdge in the plan must produce a marked edge
+    // somewhere on its type's page, and vice versa.
+    const cutEdgeMembers = plan.types.some((t) => t.members.some((mm) => mm.cutEdge))
+    expect(cutEdgeMembers).toBe(true)
+  })
+
+  it('jig svg draws opening-carved holes as dashed inner polygons, all edges cut', () => {
+    // A porthole fully inside one panel (not touching its outline) produces
+    // an outer loop + a genuine hole loop — see panelClip.test.ts's own
+    // "porthole fully inside one panel" repro for the identical fixture
+    // shape (fine dome so the shaped opening actually fits inside a facet).
+    const fineDome = generateDome({ frequency: 5, fraction: '1/2', baseMode: 'leveled' })
+    const { az, sill } = panelCentroidSpot(fineDome, R)
+    const win = { id: 'W1', azimuthDeg: az, width: 10, height: 10, sillHeight: sill, shape: 'circle' as const }
+    const cut = cutDoorways(fineDome, [win], R, { minStubLength: 6 })
+    const prisms = openingPrisms(fineDome, [win], R, { minStubLength: 6 })
+    const clips = clipPanels(fineDome, R, prisms)
+    const plan = buildPanelFrames(fineDome, R, 'imperial', cut, clips)
+
+    const holeType = plan.types.find((t) => (t.holes?.length ?? 0) > 0)
+    expect(holeType).toBeDefined()
+    // Every hole edge is cut against the opening by construction — no
+    // member bounding a hole is ever a plain shell-boundary/sill edge.
+    const holeEdgeCount = holeType!.holes!.reduce((s, h) => s + h.length, 0)
+    const cutBoundaryMemberCount = holeType!.members
+      .filter((mm) => mm.boundary && mm.cutEdge)
+      .reduce((s, mm) => s + mm.count, 0)
+    expect(cutBoundaryMemberCount).toBe(holeEdgeCount)
+
+    const svg = frameJigsSvg(plan, 'imperial', 'DOMEZ test')
+    const pageIdx = plan.types.indexOf(holeType!) + 1
+    const pageStart = svg.indexOf(`data-frame-page="${pageIdx}"`)
+    const nextStart = svg.indexOf(`data-frame-page="${pageIdx + 1}"`)
+    const page = svg.slice(pageStart, nextStart === -1 ? svg.length : nextStart)
+    expect(page).toContain('data-hole="0"')
+    expect(page).toContain('data-cut-edge')
+    expect(page).toContain('class="outline cut hole"')
+  })
 })
+
+/** Face-centroid azimuth/height probe: pick the first face whose centroid
+ * sits mid-height on the +x side, then report the bearing/sill that aims a
+ * small opening at it. Copied from panelClip.test.ts (not exported there). */
+function panelCentroidSpot(model: DomeModel, radius: number): { az: number; sill: number } {
+  const f = model.faces
+    .map((face) => {
+      const c = face.vertexIds.reduce(
+        (s, vi) => {
+          const p = model.vertices[vi].position
+          return [s[0] + p[0] / 3, s[1] + p[1] / 3, s[2] + p[2] / 3]
+        },
+        [0, 0, 0],
+      )
+      return { face, c }
+    })
+    .find(
+      ({ c }) =>
+        c[2] * radius > model.cutZ * radius + 40 &&
+        c[2] * radius < model.cutZ * radius + 80 &&
+        c[0] > 0.5,
+    )!
+  const az = (Math.atan2(f.c[1], f.c[0]) * 180) / Math.PI
+  const sill = f.c[2] * radius - model.cutZ * radius - 5
+  return { az, sill }
+}

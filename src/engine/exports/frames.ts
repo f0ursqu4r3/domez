@@ -10,6 +10,36 @@ import { PAPER, esc } from './paper'
  * corner dimensioned with the miter each member is cut to. Deliberately
  * schematic, like `panelPatternsSvg` — drawn to fit the page, not 1:1.
  */
+/** Round to 0.1 — mirrors `panelFrames.ts`'s own rounding so the dedupe
+ * keys built here from public `FrameType`/`FrameMemberSpec` fields agree
+ * exactly with the ones it used internally. */
+const r1 = (x: number) => Math.round(x * 10) / 10
+
+/** Interior angle at vertex `i` of a closed 2D polygon, in degrees. Same
+ * formula as `panelFrames.ts`'s `buildLoopGeom` corner calc, applied here
+ * to a hole loop's raw (pre-page-scale) points. */
+function cornerAngleDeg(pts: readonly [number, number][], i: number): number {
+  const nV = pts.length
+  const p = pts[i]
+  const prev = pts[(i + nV - 1) % nV]
+  const next = pts[(i + 1) % nV]
+  const va = [prev[0] - p[0], prev[1] - p[1]]
+  const vb = [next[0] - p[0], next[1] - p[1]]
+  const la = Math.hypot(va[0], va[1]) || 1
+  const lb = Math.hypot(vb[0], vb[1]) || 1
+  const cos = Math.min(1, Math.max(-1, (va[0] * vb[0] + va[1] * vb[1]) / (la * lb)))
+  return (Math.acos(cos) * 180) / Math.PI
+}
+
+/** Same dedupe key `buildPanelFrames`'s X-type pass uses internally
+ * (length + corner angles + boundary/bevel/cutEdge), rebuilt here from the
+ * public `FrameMemberSpec` fields so a hole edge's member can be recovered
+ * without a dedicated hole→member index. */
+function memberKey(len: number, bevel: number, a: number, b: number, boundary: boolean, cutEdge: boolean): string {
+  const [lo, hi] = a <= b ? [a, b] : [b, a]
+  return `${r1(len)}|${r1(bevel)}|${r1(lo)}|${r1(hi)}|${boundary}|${cutEdge}`
+}
+
 export function frameJigsSvg(plan: PanelFramePlan, units: UnitSystem, title: string): string {
   const paper = PAPER[units]
   const m = paper.margin
@@ -19,6 +49,7 @@ export function frameJigsSvg(plan: PanelFramePlan, units: UnitSystem, title: str
 
   const hasManySides = plan.types.some((t) => t.sides > 4)
   const hasSquareSill = plan.types.some((t) => t.members.some((mm) => mm.boundary && mm.bevelDeg === 0))
+  const hasSiteFit = plan.types.some((t) => t.siteFit)
   const footNotes = [
     units === 'imperial' ? '16″ seam-bolt spacing.' : '400 mm seam-bolt spacing.',
     'Cut members back at the miter — the small point clash where panels meet is a normal build detail.',
@@ -29,12 +60,15 @@ export function frameJigsSvg(plan: PanelFramePlan, units: UnitSystem, title: str
   if (hasSquareSill) {
     footNotes.push('Natural base: sill members are square-cut — scribe to grade on site.')
   }
+  if (hasSiteFit) {
+    footNotes.push('Dashed edges are cut against the opening — closure framing attaches on the far side.')
+  }
 
   const pageCount = Math.max(1, plan.types.length)
   const parts: string[] = []
   parts.push(
     `<svg xmlns="http://www.w3.org/2000/svg" width="${paper.w}${paper.unit}" height="${pageCount * paper.h}${paper.unit}" viewBox="0 0 ${paper.w} ${pageCount * paper.h}">`,
-    `<style>text{font-family:ui-monospace,monospace;font-size:${fs}px;fill:#111}.h{font-size:${fs * 1.35}px;font-weight:bold}.s{font-size:${fs * 0.85}px;fill:#444}.lbl{font-size:${fs * 0.85}px;text-anchor:middle}.outline{stroke:#111;stroke-width:${stroke};fill:none}.vtx{fill:#111}.miter{fill:#06c;text-anchor:middle}.sep{stroke:#999;stroke-width:${stroke * 0.6};stroke-dasharray:${stroke * 12} ${stroke * 8}}</style>`,
+    `<style>text{font-family:ui-monospace,monospace;font-size:${fs}px;fill:#111}.h{font-size:${fs * 1.35}px;font-weight:bold}.s{font-size:${fs * 0.85}px;fill:#444}.lbl{font-size:${fs * 0.85}px;text-anchor:middle}.outline{stroke:#111;stroke-width:${stroke};fill:none}.vtx{fill:#111}.miter{fill:#06c;text-anchor:middle}.sep{stroke:#999;stroke-width:${stroke * 0.6};stroke-dasharray:${stroke * 12} ${stroke * 8}}.cut{stroke:#c30;stroke-dasharray:${stroke * 6} ${stroke * 4}}.hole{fill:#fff}</style>`,
     `<rect width="${paper.w}" height="${pageCount * paper.h}" fill="#fff"/>`,
   )
 
@@ -59,6 +93,9 @@ export function frameJigsSvg(plan: PanelFramePlan, units: UnitSystem, title: str
     push(
       `<text x="${m}" y="${y0 + m + fs * 2.8}" class="s">members: ${t.members.map((mm) => mm.label).join(', ')}</text>`,
     )
+    if (t.siteFit) {
+      push(`<text x="${m}" y="${y0 + m + fs * 4.0}" class="s">site-fit — cut edges marked</text>`)
+    }
 
     // ---- Scale-to-fit + center the outline within the drawing box ----
     const boxX = m
@@ -105,16 +142,79 @@ export function frameJigsSvg(plan: PanelFramePlan, units: UnitSystem, title: str
       const tx = midx + nx * fs * 1.8
       const ty = midy + ny * fs * 1.8
 
-      push(`<g data-edge="${i}" data-bevel="${member.bevelDeg.toFixed(1)}">`)
-      push(`<line class="outline" x1="${p[0]}" y1="${p[1]}" x2="${q[0]}" y2="${q[1]}"/>`)
+      push(
+        `<g data-edge="${i}" data-bevel="${member.bevelDeg.toFixed(1)}"${member.cutEdge ? ' data-cut-edge="true"' : ''}>`,
+      )
+      push(
+        `<line class="outline${member.cutEdge ? ' cut' : ''}" x1="${p[0]}" y1="${p[1]}" x2="${q[0]}" y2="${q[1]}"/>`,
+      )
       push(
         `<text x="${tx}" y="${ty}" class="lbl">${esc(member.label)} ${esc(fmt(member.longPointLength))}</text>`,
       )
       push(
-        `<text x="${tx}" y="${ty + fs * 1.1}" class="lbl s">bevel ${member.bevelDeg.toFixed(1)}°${member.boundary ? ' (sill)' : ''}</text>`,
+        `<text x="${tx}" y="${ty + fs * 1.1}" class="lbl s">bevel ${member.bevelDeg.toFixed(1)}°${member.cutEdge ? ' (cut edge)' : member.boundary ? ' (sill)' : ''}</text>`,
       )
       push(`</g>`)
     }
+
+    // Opening-carved holes (X-types only): every edge of a hole loop is a
+    // cut against the opening by construction (`buildPanelFrames` only
+    // classifies a loop as a hole when literally all of its edges are cut
+    // — see `isHoleLoop` in panelFrames.ts), so every hole edge is marked
+    // `data-cut-edge` unconditionally, no per-edge lookup needed for that.
+    // Hole-loop edges are NOT tracked in `edgeMemberIdx` (that array only
+    // covers the outline), so the matching member/label is recovered here
+    // by rebuilding the same dedupe key panelFrames.ts used when it first
+    // registered the member — length + corner angles + boundary/bevel/
+    // cutEdge — from the hole's raw points and the type's public member
+    // list, rather than adding a dedicated hole→member index field.
+    const memberIdxByKey = new Map(
+      t.members.map((mm, idx) => [
+        memberKey(mm.longPointLength, mm.bevelDeg, mm.miterStartDeg, mm.miterEndDeg, mm.boundary, !!mm.cutEdge),
+        idx,
+      ]),
+    )
+    ;(t.holes ?? []).forEach((hole, hi) => {
+      const hPts = hole.map(([x, y]) => [ox + x * s, oy + y * s])
+      const nH = hPts.length
+      const hcx = hPts.reduce((sum, p) => sum + p[0], 0) / nH
+      const hcy = hPts.reduce((sum, p) => sum + p[1], 0) / nH
+      push(`<path class="outline cut hole" d="M ${hPts.map((p) => p.join(' ')).join(' L ')} Z"/>`)
+      for (const p of hPts) push(`<circle class="vtx" cx="${p[0]}" cy="${p[1]}" r="${fs * 0.16}"/>`)
+
+      for (let i = 0; i < nH; i++) {
+        const p = hPts[i]
+        const q = hPts[(i + 1) % nH]
+        const rawLen = Math.hypot(hole[(i + 1) % nH][0] - hole[i][0], hole[(i + 1) % nH][1] - hole[i][1])
+        const a = cornerAngleDeg(hole, i) / 2
+        const b = cornerAngleDeg(hole, (i + 1) % nH) / 2
+        const key = memberKey(rawLen, 0, a, b, true, true)
+        const mi = memberIdxByKey.get(key)
+        const member = mi !== undefined ? t.members[mi] : undefined
+
+        const ex = q[0] - p[0]
+        const ey = q[1] - p[1]
+        const elen = Math.hypot(ex, ey) || 1
+        let nx = -ey / elen
+        let ny = ex / elen
+        const midx = (p[0] + q[0]) / 2
+        const midy = (p[1] + q[1]) / 2
+        if ((midx - hcx) * nx + (midy - hcy) * ny < 0) {
+          nx = -nx
+          ny = -ny
+        }
+        const tx = midx + nx * fs * 1.8
+        const ty = midy + ny * fs * 1.8
+
+        push(`<g data-hole="${hi}" data-edge="${i}" data-cut-edge="true">`)
+        push(`<line class="outline cut" x1="${p[0]}" y1="${p[1]}" x2="${q[0]}" y2="${q[1]}"/>`)
+        push(
+          `<text x="${tx}" y="${ty}" class="lbl">${esc(member?.label ?? `${t.label}-hole${hi + 1}`)} ${esc(fmt(member?.longPointLength ?? rawLen))}</text>`,
+        )
+        push(`<text x="${tx}" y="${ty + fs * 1.1}" class="lbl s">cut edge</text>`)
+        push(`</g>`)
+      }
+    })
 
     for (let i = 0; i < nV; i++) {
       const v = pts[i]

@@ -1728,6 +1728,49 @@ describe('panel flat patterns', () => {
     )
     expect(empty).toContain('no panels')
   })
+
+  it('draws one clipped-pattern page per PanelPlan.clipped entry, with holes, area, and a site-fit caption', () => {
+    const clipWithHole: ClippedPanelType = {
+      label: 'X1',
+      outline: [[0, 0], [24, 0], [24, 36], [0, 36]],
+      holes: [[[6, 6], [10, 6], [10, 10], [6, 10]]],
+      trueArea: 848, // 24×36 minus a 4×4 hole
+      bboxW: 24,
+      bboxH: 36,
+      seamed: false,
+    }
+    const bigClip: ClippedPanelType = {
+      label: 'X2',
+      outline: [[0, 0], [100, 0], [100, 100], [0, 100]],
+      holes: [],
+      trueArea: 10000,
+      bboxW: 100,
+      bboxH: 100,
+      seamed: true,
+    }
+    const plan = planPanels(model, 150, {
+      sheetW: 48,
+      sheetL: 96,
+      sheetLabel: '4×8 ft sheet',
+      skinFactor: 1,
+      excludeFaceIds: new Set(model.faces.map((f) => f.id)),
+      clipped: [clipWithHole, bigClip],
+    })
+    const svg = panelPatternsSvg(plan, { units: 'imperial', title: 'test' })
+    expect(svg).toContain('panel X1')
+    expect(svg).toContain('panel X2')
+    expect(svg).toContain('site-fit')
+    // Area is reported net of the hole (848 in² → ft²), each on its own page.
+    expect(svg).toContain((848 / 144).toFixed(2))
+    expect(svg).toContain((10000 / 144).toFixed(2))
+    expect(svg).toContain('seamed — too large for one sheet')
+    // One <path> for the outline, one more for the hole, on X1's page only.
+    const first = svg.indexOf('data-pattern-page')
+    const second = svg.indexOf('data-pattern-page', first + 1)
+    const x1Page = svg.slice(first, second)
+    const paths = x1Page.match(/<path/g) ?? []
+    expect(paths.length).toBe(2)
+  })
 })
 
 describe('goldberg dual — full sphere and natural base', () => {

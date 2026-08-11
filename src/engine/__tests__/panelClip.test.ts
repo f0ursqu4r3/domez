@@ -616,6 +616,42 @@ describe('flush and contained openings (synthetic rect prisms, 3V)', () => {
     }
   })
 
+  it('sub-grid sliver offsets (loop-grid zone) degrade per unit instead of throwing', () => {
+    // δ between the clip epsilon (1e-9·d) and the loop grid (1e-4·d) leaves
+    // remnant slivers thinner than the grid — unrepresentable by loop
+    // reconstruction. Before the containment guard, the z-edge small-first
+    // case at δ=3e-3 escaped clipOneUnit as 'panelClip: loop failed to
+    // close', crashing clipPanels for the whole model, and other grid-zone
+    // configs emitted quantization-mangled sliver loops (edges off every
+    // boundary plane). The guard degrades the affected unit instead: the
+    // sliver is dropped, costing at most its own (grid-bounded) area.
+    for (const d of [3e-4, 1e-3, 3e-3]) {
+      const sT = rectPrism('S', 2, 8 + d, zc - 3, zc + 3)
+      const sZ = rectPrism('S', -4, 4, zc, zc + 6 + d)
+      const sC = rectPrism('S', 2, 8 + d, zc, zc + 6 + d)
+      for (const small of [sT, sZ, sC]) {
+        for (const prisms of [[big, small], [small, big]]) {
+          const clips = clipPanels(dome, R, prisms) // must not throw
+          const c = clips[targetUnit]
+          expect(c.status).toBe('clipped')
+          // fragments/area never pass through loop reconstruction — exact.
+          const fragArea = c.fragments.reduce((s, f) => s + polyArea3(f as [number, number, number][]), 0)
+          expect(c.area).toBeCloseTo(fragArea, 6)
+          // The unit still returns a closed, simple, boundary-only loop set.
+          expect(c.loops.length).toBeGreaterThanOrEqual(2)
+          for (const loop of c.loops) {
+            expect(loop.pts.length).toBeGreaterThanOrEqual(3)
+            assertLoopIntegrity(dome, R, rectUnits[targetUnit].ring, prisms, loop)
+          }
+          // Degradation cost stays in the quantization class (≈ grid ×
+          // sliver perimeter, ~1e-1 here at worst), far below the opening
+          // areas themselves (~34–67 in² on this fixture).
+          expect(Math.abs(signedLoopAreaSum(c.loops) - c.area)).toBeLessThan(0.1)
+        }
+      }
+    }
+  })
+
   it('a third window strictly inside an L-shaped hole remnant is not double-subtracted (all orders)', () => {
     const partner = rectPrism('P', 2, 14, zc, zc + 10) // notches big's corner → L remnant
     const third = rectPrism('T', -6, -1, zc - 4, zc + 1) // strictly inside the L, outside partner

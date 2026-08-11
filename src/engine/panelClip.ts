@@ -599,8 +599,48 @@ function clipOneUnit(unit: PanelUnit, unitIndex: number, model: DomeModel, radiu
         }
         continue
       }
-      const notched = buildLoopsFromFragments([piece, reverseTaggedFrag(bite)], diameter, areaFloor)
-      for (const n of notched) nextPieces.push({ pts: n.pts2D, tags: n.tags, isHole: piece.isHole })
+      // ---- Sub-grid sliver containment guard ----
+      // Loop reconstruction quantizes to a grid of diameter·1e-4: edges
+      // shorter than half the grid are dropped and endpoints within a grid
+      // bucket are merged. A splice whose remnant is thinner than that grid
+      // (two prisms' boundary planes a few mils apart — reachable only via
+      // overlapping openings, which the UI's optimizer keep-outs currently
+      // prevent) therefore cannot be represented: depending on where the
+      // sliver falls relative to the buckets it either reconstructs mangled
+      // or fails to close outright. Neither may escape `clipPanels` — a
+      // per-unit reconstruction failure must degrade that unit's loops, not
+      // crash the whole model. Two-part degradation, both bounded by the
+      // same quantization error class as the silent sub-areaFloor sliver
+      // losses this module already accepts (≈ grid × perimeter):
+      //   (a) if the splice THROWS, fall back to whichever of "piece fully
+      //       consumed" (drop it) or "bite unrepresentable" (keep the piece
+      //       unchanged) mis-states the smaller area;
+      //   (b) if the splice succeeds, still drop any output loop thinner
+      //       than the grid everywhere (|area| < perimeter × grid) — its
+      //       geometry is quantization noise, not a usable loop.
+      // `fragments`/`area` never pass through this path and stay exact.
+      let notched: LoopWithArea[] | null = null
+      try {
+        notched = buildLoopsFromFragments([piece, reverseTaggedFrag(bite)], diameter, areaFloor)
+      } catch {
+        notched = null
+      }
+      if (notched === null) {
+        const pieceArea = Math.abs(area2(piece.pts))
+        if (pieceArea - biteArea > biteArea) nextPieces.push(piece)
+        continue
+      }
+      const grid = diameter * 1e-4
+      for (const n of notched) {
+        let perimeter = 0
+        for (let i = 0; i < n.pts2D.length; i++) {
+          const a = n.pts2D[i]
+          const b = n.pts2D[(i + 1) % n.pts2D.length]
+          perimeter += Math.hypot(b[0] - a[0], b[1] - a[1])
+        }
+        if (Math.abs(n.signedArea) < perimeter * grid) continue
+        nextPieces.push({ pts: n.pts2D, tags: n.tags, isHole: piece.isHole })
+      }
     }
     pieces = nextPieces
   }

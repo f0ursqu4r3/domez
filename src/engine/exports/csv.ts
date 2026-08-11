@@ -1,6 +1,6 @@
 import type { CutList } from '../cutlist'
 import type { DoorFrameInfo } from '../doorway'
-import type { PanelPlan } from '../panels'
+import { rectsPerSheet, SEAM_WASTE, type PanelPlan } from '../panels'
 import type { PanelFramePlan } from '../panelFrames'
 import type { PackingResult } from '../packing'
 import type { OpeningGroup } from '../openings'
@@ -196,6 +196,30 @@ export function panelsCsv(plan: PanelPlan, units: UnitSystem): string {
         t.seamed ? '—' : t.perSheet,
         t.sheets,
         t.seamed ? 'too large for one sheet — seam from pieces' : 'two per nested rectangle',
+      ),
+    )
+  }
+  // Opening-clipped, one-off site-fit pieces — same columns as the grouped
+  // panel rows above, with the bounding rect standing in for edge lengths
+  // (every piece is a unique shape, so there's no shared "per sheet" count
+  // to group by; recompute it here the same way `planPanels` does, from
+  // the bbox against this plan's sheet, for a single source of truth).
+  for (const c of plan.clipped) {
+    const perSheet = rectsPerSheet(c.bboxW, c.bboxH, plan.sheetW, plan.sheetL)
+    const sheets = c.seamed
+      ? Math.ceil((plan.skinFactor * c.trueArea * SEAM_WASTE) / (plan.sheetW * plan.sheetL))
+      : Math.ceil(plan.skinFactor / perSheet)
+    lines.push(
+      row(
+        c.label,
+        plan.skinFactor,
+        `${c.bboxW.toFixed(2)} × ${c.bboxH.toFixed(2)}`,
+        areaOf(c.trueArea).toFixed(2),
+        c.seamed ? '—' : perSheet,
+        sheets,
+        c.seamed
+          ? 'too large for one sheet — seam from pieces'
+          : 'site-fit opening panel, one-off',
       ),
     )
   }

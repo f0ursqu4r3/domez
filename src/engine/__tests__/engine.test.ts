@@ -7,7 +7,7 @@ import { packCuts } from '../packing'
 import { optimizeDiameter } from '../optimize'
 import { analyzeOpenings } from '../openings'
 import { cutDoorways, emptyDoorwayCut, optimizeDoorPlacement } from '../doorway'
-import { planPanels } from '../panels'
+import { planPanels, type ClippedPanelType } from '../panels'
 import { buildRiser, orderedBaseRing } from '../riser'
 import { projectJson, parseProjectJson } from '../exports/json'
 import { miterCsv } from '../exports/csv'
@@ -674,6 +674,60 @@ describe('panel sheet planning', () => {
     const plan = planPanels(big, 156, { sheetW: 48, sheetL: 96, sheetLabel: '4×8', skinFactor: 1 })
     // 26 ft 3V panels have ~61" edges — none fit a 4×8 sheet whole.
     expect(plan.types.some((t) => t.seamed)).toBe(true)
+  })
+})
+
+describe('clipped skin panels in the takeoff', () => {
+  const dome = generateDome({ frequency: 3, fraction: '5/8' })
+  const sheet = { sheetW: 48, sheetL: 96, sheetLabel: '4×8' }
+  const oneClip: ClippedPanelType = {
+    label: 'X1',
+    outline: [[0, 0], [24, 0], [24, 36], [0, 36]],
+    holes: [],
+    trueArea: 500,
+    bboxW: 24,
+    bboxH: 36,
+    seamed: false,
+  }
+
+  it('carries the clipped piece into the plan and grows the sheet/area totals', () => {
+    const base = planPanels(dome, 156, { ...sheet, skinFactor: 1 })
+    const plan = planPanels(dome, 156, { ...sheet, skinFactor: 1, clipped: [oneClip] })
+    expect(plan.clipped).toHaveLength(1)
+    expect(plan.clipped[0].label).toBe('X1')
+    expect(plan.clipped[0].seamed).toBe(false)
+    expect(plan.totalPanels).toBe(base.totalPanels + 1)
+    expect(plan.totalPanelArea).toBeCloseTo(base.totalPanelArea + 500, 6)
+    expect(plan.totalSheets).toBeGreaterThan(base.totalSheets)
+  })
+
+  it('doubles the clipped-panel contribution when both skins are panelled', () => {
+    const singleBase = planPanels(dome, 156, { ...sheet, skinFactor: 1 })
+    const bothBase = planPanels(dome, 156, { ...sheet, skinFactor: 2 })
+    const single = planPanels(dome, 156, { ...sheet, skinFactor: 1, clipped: [oneClip] })
+    const both = planPanels(dome, 156, { ...sheet, skinFactor: 2, clipped: [oneClip] })
+    // The clipped piece itself contributes 1 panel at skinFactor 1, 2 at
+    // skinFactor 2 (inside + outside), same doubling rule as every other
+    // group — isolate its share by subtracting the un-clipped baseline.
+    expect(single.totalPanels - singleBase.totalPanels).toBe(1)
+    expect(both.totalPanels - bothBase.totalPanels).toBe(2)
+    expect(single.totalPanelArea - singleBase.totalPanelArea).toBeCloseTo(500, 6)
+    expect(both.totalPanelArea - bothBase.totalPanelArea).toBeCloseTo(1000, 6)
+  })
+
+  it('flags a clipped piece bigger than one sheet in either orientation as seamed', () => {
+    const bigClip: ClippedPanelType = { ...oneClip, label: 'X2', bboxW: 100, bboxH: 100 }
+    const plan = planPanels(dome, 156, { ...sheet, skinFactor: 1, clipped: [bigClip] })
+    expect(plan.clipped[0].seamed).toBe(true)
+    // Seamed sheets are estimated by area × SEAM_WASTE — at least 1 sheet.
+    const base = planPanels(dome, 156, { ...sheet, skinFactor: 1 })
+    expect(plan.totalSheets).toBeGreaterThan(base.totalSheets)
+  })
+
+  it('ignores a caller-supplied seamed flag and recomputes it from bbox vs sheet', () => {
+    const mislabeled: ClippedPanelType = { ...oneClip, seamed: true }
+    const plan = planPanels(dome, 156, { ...sheet, skinFactor: 1, clipped: [mislabeled] })
+    expect(plan.clipped[0].seamed).toBe(false)
   })
 })
 

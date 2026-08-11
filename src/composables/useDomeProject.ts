@@ -18,15 +18,21 @@ import {
   type DoorPlacementResult,
   type DoorSpec,
 } from '@/engine/doorway'
-import { planPanels } from '@/engine/panels'
+import { planPanels, type ClippedPanelType } from '@/engine/panels'
 import { buildPanelFrames } from '@/engine/panelFrames'
-import { clipPanels } from '@/engine/panelClip'
+import {
+  clipPanels,
+  panelUnits,
+  type ClippedPanel,
+  type ClippedLoop,
+  type PanelUnit,
+} from '@/engine/panelClip'
 import { buildRiser } from '@/engine/riser'
 import { buildBom, estimateCost } from '@/engine/bom'
 import { generateZome } from '@/engine/zome'
 import { generateGoldberg } from '@/engine/goldberg'
 import { diameterToWorking, IMPERIAL_INCREMENTS, METRIC_INCREMENTS } from '@/engine/units'
-import type { Fraction, Frequency, UnitSystem } from '@/engine/types'
+import type { DomeModel, Fraction, Frequency, UnitSystem, Vec3 } from '@/engine/types'
 import {
   cutListCsv,
   hubsCsv,
@@ -594,69 +600,220 @@ const panelSheet = computed(() =>
     : { w: 1220, l: 2440, label: '1220×2440 mm sheet' },
 )
 
+/** Right-handed in-plane basis for a set of already-scaled (working-unit)
+ * points: Newell normal + a reference-vector tangent basis (ref = ±Z
+ * unless the normal is nearly vertical, then ±X). Computed once per panel
+ * unit — from its full, undamaged ring — and shared by every one of that
+ * unit's clip loops in `splitClippedUnit` below, so an outer loop and its
+ * holes land in the exact same 2D frame regardless of their own (possibly
+ * opposite) winding: a per-loop Newell normal would flip sign on a CW hole
+ * loop and silently misalign it against the outer loop's coordinates. Also
+ * used, one-shot, for whole goldberg-poly outlines (no clip loops to keep
+ * aligned there, but the same construction applies). */
+function planeBasis(pts: Vec3[]): { e1: [number, number, number]; e2: [number, number, number] } {
+  let nx = 0
+  let ny = 0
+  let nz = 0
+  for (let i = 0; i < pts.length; i++) {
+    const p = pts[i]
+    const q = pts[(i + 1) % pts.length]
+    nx += (p[1] - q[1]) * (p[2] + q[2])
+    ny += (p[2] - q[2]) * (p[0] + q[0])
+    nz += (p[0] - q[0]) * (p[1] + q[1])
+  }
+  const nl = Math.hypot(nx, ny, nz) || 1
+  const n: [number, number, number] = [nx / nl, ny / nl, nz / nl]
+  const ref: [number, number, number] = Math.abs(n[2]) > 0.9 ? [1, 0, 0] : [0, 0, 1]
+  const e1x = n[1] * ref[2] - n[2] * ref[1]
+  const e1y = n[2] * ref[0] - n[0] * ref[2]
+  const e1z = n[0] * ref[1] - n[1] * ref[0]
+  const e1l = Math.hypot(e1x, e1y, e1z) || 1
+  const e1: [number, number, number] = [e1x / e1l, e1y / e1l, e1z / e1l]
+  const e2: [number, number, number] = [
+    n[1] * e1[2] - n[2] * e1[1],
+    n[2] * e1[0] - n[0] * e1[2],
+    n[0] * e1[1] - n[1] * e1[0],
+  ]
+  return { e1, e2 }
+}
+
+/** Project already-scaled points into a shared plane basis, working units. */
+function flattenToBasis(
+  pts: Vec3[],
+  basis: { e1: [number, number, number]; e2: [number, number, number] },
+): [number, number][] {
+  return pts.map(
+    (p) =>
+      [
+        p[0] * basis.e1[0] + p[1] * basis.e1[1] + p[2] * basis.e1[2],
+        p[0] * basis.e2[0] + p[1] * basis.e2[1] + p[2] * basis.e2[2],
+      ] as [number, number],
+  )
+}
+
+function shoelaceArea(pts: [number, number][]): number {
+  let a = 0
+  for (let i = 0; i < pts.length; i++) {
+    const [x0, y0] = pts[i]
+    const [x1, y1] = pts[(i + 1) % pts.length]
+    a += x0 * y1 - x1 * y0
+  }
+  return a / 2
+}
+
+/** Even-odd point-in-polygon test (ray casting) — duplicated rather than
+ * exported from `panelFrames.ts`'s identical ~10-line helper; small enough
+ * that a shared export isn't worth the coupling. */
+function pointInPolygon2D(pt: readonly [number, number], poly: readonly [number, number][]): boolean {
+  let inside = false
+  const n = poly.length
+  for (let i = 0, j = n - 1; i < n; j = i++) {
+    const [xi, yi] = poly[i]
+    const [xj, yj] = poly[j]
+    if (yi > pt[1] !== yj > pt[1]) {
+      const xIntersect = xi + ((pt[1] - yi) / (yj - yi)) * (xj - xi)
+      if (pt[0] < xIntersect) inside = !inside
+    }
+  }
+  return inside
+}
+
+/** Split one clipped panel unit's boundary loops into skin pieces: one
+ * outer (non-hole) loop = one piece — a unit clipped into disjoint islands
+ * (e.g. a narrow door slitting a panel edge-to-edge) yields several — with
+ * hole loops assigned to whichever outer loop's outline actually contains
+ * them (point-in-polygon on the shared 2D projection: a bite can only ever
+ * land fully inside one island). Mirrors `buildPanelFrames`'s identical
+ * island/hole-assignment logic; simplified since the skin takeoff only
+ * needs the outline's area/bbox, not corner angles or member bevels.
+ * `label`/`seamed` are filled in by the caller (label needs the running
+ * X-counter; seamed is recomputed by `planPanels` against the active
+ * sheet). */
+function splitClippedUnit(
+  unit: PanelUnit,
+  clip: ClippedPanel,
+  domeModel: DomeModel,
+  domeRadius: number,
+): Omit<ClippedPanelType, 'label' | 'seamed'>[] {
+  const ringPts = unit.ring.map(
+    (vi) => domeModel.vertices[vi].position.map((c) => c * domeRadius) as unknown as Vec3,
+  )
+  const basis = planeBasis(ringPts)
+  const isHoleLoop = (l: ClippedLoop) => l.cut.every(Boolean)
+  const loopPts2D = clip.loops.map((l) => flattenToBasis(l.pts, basis))
+  let outerIdx = clip.loops.map((l, li) => (isHoleLoop(l) ? -1 : li)).filter((li) => li >= 0)
+  let holeIdx = clip.loops.map((l, li) => (isHoleLoop(l) ? li : -1)).filter((li) => li >= 0)
+  if (outerIdx.length === 0) {
+    // Degenerate (shouldn't happen for a genuinely 'clipped' panel — see
+    // panelFrames.ts's identical fallback): treat the largest loop (loops
+    // are area-sorted) as the outline rather than dropping the piece.
+    outerIdx = [0]
+    holeIdx = holeIdx.filter((li) => li !== 0)
+  }
+  const holeBuckets: number[][] = outerIdx.map(() => [])
+  for (const hi of holeIdx) {
+    const testPt = loopPts2D[hi][0]
+    let assigned = 0
+    for (let oi = 0; oi < outerIdx.length; oi++) {
+      if (pointInPolygon2D(testPt, loopPts2D[outerIdx[oi]])) {
+        assigned = oi
+        break
+      }
+    }
+    holeBuckets[assigned].push(hi)
+  }
+  return outerIdx.map((li, k) => {
+    const outline2D = loopPts2D[li]
+    const xs = outline2D.map((p) => p[0])
+    const ys = outline2D.map((p) => p[1])
+    const minX = Math.min(...xs)
+    const minY = Math.min(...ys)
+    const shift = (p: [number, number]): [number, number] => [p[0] - minX, p[1] - minY]
+    const holes2D = holeBuckets[k].map((hi) => loopPts2D[hi])
+    return {
+      outline: outline2D.map(shift),
+      holes: holes2D.map((h) => h.map(shift)),
+      trueArea:
+        Math.abs(shoelaceArea(outline2D)) -
+        holes2D.reduce((s, h) => s + Math.abs(shoelaceArea(h)), 0),
+      bboxW: Math.max(...xs) - minX,
+      bboxH: Math.max(...ys) - minY,
+    }
+  })
+}
+
 /** Skin panel takeoff: solid panels only (openings and doorway cuts are
- * not skinned), doubled when panels mount inside AND outside. */
+ * not skinned), doubled when panels mount inside AND outside. Per-unit
+ * handling comes from `panelClips` (Task 3's clip-vs-opening-prism result,
+ * index-aligned with `panelUnits(model.value)`): 'removed' units contribute
+ * nothing, 'clipped' units become one-off `ClippedPanelType` skin pieces,
+ * and 'whole' units follow the pre-clip per-family paths below — UNLESS a
+ * painted opening (`state.openings`, independent of the parametric
+ * doorway/window prisms) already marks one of the unit's faces dead, which
+ * excludes the whole unit regardless of clip status (painting only ever
+ * removes skin; it never un-clips a unit the prisms also cut). */
 const panelPlan = computed(() => {
-  const exclude = new Set<number>(doorway.value.removedFaces)
-  for (const key of Object.keys(state.openings)) exclude.add(Number(key))
-  // Zome rhombi never take the triangle path: surviving ones (no cut, no
-  // painted opening on either half) join as whole rhombic pieces.
+  const units = panelUnits(model.value)
+  const clips = panelClips.value
+  const painted = new Set<number>(Object.keys(state.openings).map(Number))
+  const rhombiCount = model.value.rhombi?.length ?? 0
+  // Every unit is a poly group under `model.polys`; the first `rhombiCount`
+  // units are rhomb groups under `model.rhombi` (the rest are the leftover
+  // uncovered faces `panelUnits` appends); otherwise every unit is a bare
+  // triangle face. Mirrors `panelUnits`' own construction order exactly.
+  const isGroupUnit = (i: number): boolean => {
+    if (model.value.polys) return true
+    if (model.value.rhombi) return i < rhombiCount
+    return false
+  }
+
+  const exclude = new Set<number>()
   const rhombs: { d1: number; d2: number }[] = []
-  if (model.value.rhombi) {
-    for (const rh of model.value.rhombi) {
-      const dead = rh.faceIds.some((fid) => exclude.has(fid))
-      rh.faceIds.forEach((fid) => exclude.add(fid))
-      if (dead) continue
-      const [t, a, b, sv] = rh.vertexIds.map((vi) => model.value.vertices[vi].position)
+  const polyOutlines: [number, number][][] = []
+  const clipped: ClippedPanelType[] = []
+  let xi = 0
+
+  for (let i = 0; i < units.length; i++) {
+    const unit = units[i]
+    const clip = clips[i]
+    const grouped = isGroupUnit(i)
+    // Rhomb/poly-group faces never take the base triangle path, dead or
+    // alive — they're accounted for below (whole) or not at all (dead).
+    if (grouped) unit.faceIds.forEach((fid) => exclude.add(fid))
+
+    if (unit.faceIds.some((fid) => painted.has(fid))) {
+      unit.faceIds.forEach((fid) => exclude.add(fid))
+      continue
+    }
+    if (clip.status === 'removed') {
+      unit.faceIds.forEach((fid) => exclude.add(fid))
+      continue
+    }
+    if (clip.status === 'clipped') {
+      unit.faceIds.forEach((fid) => exclude.add(fid))
+      for (const piece of splitClippedUnit(unit, clip, model.value, radius.value)) {
+        xi++
+        clipped.push({ ...piece, label: `X${xi}`, seamed: false })
+      }
+      continue
+    }
+
+    // 'whole': today's per-family paths.
+    if (!grouped) continue // bare triangle face — the base loop in planPanels picks it up.
+    if (model.value.polys) {
+      const pts = unit.ring.map(
+        (vi) => model.value.vertices[vi].position.map((c) => c * radius.value) as unknown as Vec3,
+      )
+      polyOutlines.push(flattenToBasis(pts, planeBasis(pts)))
+    } else if (model.value.rhombi) {
+      const [t, a, b, sv] = unit.ring.map((vi) => model.value.vertices[vi].position)
       rhombs.push({
         d1: Math.hypot(t[0] - b[0], t[1] - b[1], t[2] - b[2]) * radius.value,
         d2: Math.hypot(a[0] - sv[0], a[1] - sv[1], a[2] - sv[2]) * radius.value,
       })
     }
   }
-  // Goldberg polygons: exclude fan faces, pass surviving outlines in 2D.
-  const polyOutlines: [number, number][][] = []
-  if (model.value.polys) {
-    for (const pg of model.value.polys) {
-      const dead = pg.faceIds.some((fid) => exclude.has(fid))
-      pg.faceIds.forEach((fid) => exclude.add(fid))
-      if (dead) continue
-      const pts = pg.vertexIds.map((vi) => model.value.vertices[vi].position)
-      // Newell normal + tangent basis -> flatten to 2D, working units.
-      let nx = 0
-      let ny = 0
-      let nz = 0
-      for (let i = 0; i < pts.length; i++) {
-        const p = pts[i]
-        const q = pts[(i + 1) % pts.length]
-        nx += (p[1] - q[1]) * (p[2] + q[2])
-        ny += (p[2] - q[2]) * (p[0] + q[0])
-        nz += (p[0] - q[0]) * (p[1] + q[1])
-      }
-      const nl = Math.hypot(nx, ny, nz) || 1
-      const n: [number, number, number] = [nx / nl, ny / nl, nz / nl]
-      const ref: [number, number, number] = Math.abs(n[2]) > 0.9 ? [1, 0, 0] : [0, 0, 1]
-      const e1x = n[1] * ref[2] - n[2] * ref[1]
-      const e1y = n[2] * ref[0] - n[0] * ref[2]
-      const e1z = n[0] * ref[1] - n[1] * ref[0]
-      const e1l = Math.hypot(e1x, e1y, e1z) || 1
-      const e1: [number, number, number] = [e1x / e1l, e1y / e1l, e1z / e1l]
-      const e2: [number, number, number] = [
-        n[1] * e1[2] - n[2] * e1[1],
-        n[2] * e1[0] - n[0] * e1[2],
-        n[0] * e1[1] - n[1] * e1[0],
-      ]
-      polyOutlines.push(
-        pts.map(
-          (p) =>
-            [
-              (p[0] * e1[0] + p[1] * e1[1] + p[2] * e1[2]) * radius.value,
-              (p[0] * e2[0] + p[1] * e2[1] + p[2] * e2[2]) * radius.value,
-            ] as [number, number],
-        ),
-      )
-    }
-  }
+
   return planPanels(model.value, radius.value, {
     sheetW: panelSheet.value.w,
     sheetL: panelSheet.value.l,
@@ -665,6 +822,7 @@ const panelPlan = computed(() => {
     skinFactor: state.panelPlacement === 'both' ? 2 : 1,
     rects: riser.value?.sheathingRects,
     rhombs,
+    clipped,
     polyOutlines,
   })
 })

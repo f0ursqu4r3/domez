@@ -70,11 +70,36 @@ export interface PolyPanelType {
   sheets: number
 }
 
+/** A one-off, site-fit skin panel produced by clipping a panel unit against
+ * an opening prism (see `panelClip.ts`). Unlike the grouped panel types
+ * above, every clipped piece is unique — no signature grouping, so there's
+ * no `count`/`perSheet`/`sheets`; it's packed individually by its bounding
+ * rect (see `planPanels`). */
+export interface ClippedPanelType {
+  /** X1, X2, ... in unit order; one entry per outer (non-hole) loop, so a
+   * unit that clips into disjoint islands yields several. */
+  label: string
+  /** Outer loop, 2D working units, translated so the bbox min is the
+   * origin (same convention as `PolyPanelType.outline`). */
+  outline: [number, number][]
+  /** Opening-carved void loops fully inside this piece, same basis/offset
+   * as `outline`. */
+  holes: [number, number][][]
+  /** Surviving area, working units² (net of holes). */
+  trueArea: number
+  /** Axis-aligned bounding box of `outline`, working units. */
+  bboxW: number
+  bboxH: number
+  /** Bbox exceeds one sheet in both orientations. */
+  seamed: boolean
+}
+
 export interface PanelPlan {
   types: PanelType[]
   rects: RectPanelType[]
   rhombs: RhombPanelType[]
   polys: PolyPanelType[]
+  clipped: ClippedPanelType[]
   sheetW: number
   sheetL: number
   sheetLabel: string
@@ -99,12 +124,16 @@ export interface PanelPlanOptions {
   rhombs?: { d1: number; d2: number }[]
   /** Polygonal pieces as 2D outlines, working units (goldberg panels). */
   polyOutlines?: [number, number][][]
+  /** Opening-clipped, one-off skin pieces (see `ClippedPanelType`). `seamed`
+   * is recomputed from `bboxW`/`bboxH` against this plan's sheet, so any
+   * value passed in here is ignored. */
+  clipped?: ClippedPanelType[]
 }
 
 /** Waste allowance for seamed (multi-piece) panels. */
-const SEAM_WASTE = 1.3
+export const SEAM_WASTE = 1.3
 
-function rectsPerSheet(w: number, h: number, sheetW: number, sheetL: number): number {
+export function rectsPerSheet(w: number, h: number, sheetW: number, sheetL: number): number {
   let best = 0
   if (w <= sheetW && h <= sheetL) best = Math.max(best, Math.floor(sheetW / w) * Math.floor(sheetL / h))
   if (w <= sheetL && h <= sheetW) best = Math.max(best, Math.floor(sheetL / w) * Math.floor(sheetW / h))
@@ -273,26 +302,50 @@ export function planPanels(model: DomeModel, radius: number, opts: PanelPlanOpti
       }
     })
 
+  // Clipped pieces (opening-carved skin panels): unique, one-off shapes, so
+  // each is packed individually by its bounding rect — the same trick as
+  // the rectangular sheathing pieces, just without shape grouping. `seamed`
+  // is always recomputed here (never trusted from the caller) since it
+  // depends on this plan's sheet size.
+  const clipped: ClippedPanelType[] = (opts.clipped ?? []).map((c) => ({
+    ...c,
+    seamed: rectsPerSheet(c.bboxW, c.bboxH, opts.sheetW, opts.sheetL) === 0,
+  }))
+  let clippedSheets = 0
+  for (const c of clipped) {
+    const count = opts.skinFactor
+    if (c.seamed) {
+      clippedSheets += Math.ceil((count * c.trueArea * SEAM_WASTE) / sheetArea)
+    } else {
+      const perSheet = rectsPerSheet(c.bboxW, c.bboxH, opts.sheetW, opts.sheetL)
+      clippedSheets += Math.ceil(count / perSheet)
+    }
+  }
+
   const totalPanels =
     types.reduce((n, t) => n + t.count, 0) +
     rects.reduce((n, t) => n + t.count, 0) +
     rhombs.reduce((n, t) => n + t.count, 0) +
-    polys.reduce((n, t) => n + t.count, 0)
+    polys.reduce((n, t) => n + t.count, 0) +
+    clipped.length * opts.skinFactor
   const totalPanelArea =
     types.reduce((n, t) => n + t.area * t.count, 0) +
     rects.reduce((n, t) => n + t.area * t.count, 0) +
     rhombs.reduce((n, t) => n + t.area * t.count, 0) +
-    polys.reduce((n, t) => n + t.area * t.count, 0)
+    polys.reduce((n, t) => n + t.area * t.count, 0) +
+    clipped.reduce((n, c) => n + c.trueArea, 0) * opts.skinFactor
   const totalSheets =
     types.reduce((n, t) => n + t.sheets, 0) +
     rects.reduce((n, t) => n + t.sheets, 0) +
     rhombs.reduce((n, t) => n + t.sheets, 0) +
-    polys.reduce((n, t) => n + t.sheets, 0)
+    polys.reduce((n, t) => n + t.sheets, 0) +
+    clippedSheets
   return {
     types,
     rects,
     rhombs,
     polys,
+    clipped,
     sheetW: opts.sheetW,
     sheetL: opts.sheetL,
     sheetLabel: opts.sheetLabel,

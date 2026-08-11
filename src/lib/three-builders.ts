@@ -7,6 +7,7 @@ import { hubAxes } from '@/engine/hubs'
 import type { RiserModel } from '@/engine/riser'
 import { strutColor } from '@/engine/exports/svg'
 import type { ViewMode } from '@/composables/useDomeProject'
+import { panelUnits, type ClippedPanel } from '@/engine/panelClip'
 
 /** Engine is z-up; three.js is y-up. Proper rotation (x, y, z) -> (x, z, -y). */
 export const toThree = (p: readonly number[], r: number) =>
@@ -68,6 +69,40 @@ function clipSolid(
   return out
 }
 
+/** Which ring-edge index (of a closed loop `ringPts[i] → ringPts[i+1]`) a
+ * clipped panel loop's edge (a, b) lies on: both endpoints within `eps` of
+ * the ring edge's line AND within its param range. A non-cut loop edge is
+ * either the full ring edge or a T-junction sub-piece of it (see
+ * `panelClip.ts`'s loop reconstruction), never some other line — mirrors
+ * `panelFrames.ts`'s `matchRingEdge`, in three.js space (an orthogonal
+ * change of basis from the engine's, so distances/params agree exactly). */
+function matchRingEdgeIdx(
+  ringPts: THREE.Vector3[],
+  a: THREE.Vector3,
+  b: THREE.Vector3,
+  eps: number,
+): number | undefined {
+  const nV = ringPts.length
+  for (let i = 0; i < nV; i++) {
+    const ra = ringPts[i]
+    const rb = ringPts[(i + 1) % nV]
+    const dir = rb.clone().sub(ra)
+    const segLenSq = dir.lengthSq()
+    if (segLenSq < 1e-18) continue
+    const paramAndDist = (p: THREE.Vector3) => {
+      const t = p.clone().sub(ra).dot(dir) / segLenSq
+      const c = ra.clone().addScaledVector(dir, t)
+      return { t, dist: p.distanceTo(c) }
+    }
+    const pa = paramAndDist(a)
+    const pb = paramAndDist(b)
+    if (pa.dist > eps || pb.dist > eps) continue
+    if (pa.t < -1e-6 || pa.t > 1 + 1e-6 || pb.t < -1e-6 || pb.t > 1 + 1e-6) continue
+    return i
+  }
+  return undefined
+}
+
 export interface BuildOptions {
   mode: ViewMode
   /** 0..1, only used in exploded mode. */
@@ -101,6 +136,11 @@ export interface BuildOptions {
   endOffset?: number
   /** Loads-view per-strut force + utilization, edge-indexed (index === edgeId). */
   loads?: { forceN: number; utilization: number }[]
+  /** Panel-vs-opening clip results, index-aligned with `panelUnits(model)`
+   * (see `engine/panelClip.ts`). Drives framed-panel members and skin/
+   * surface rendering for clipped/removed units. Undefined falls back to
+   * the pre-clip behavior (whole-panel-only, gated by `doorway.removedFaces`). */
+  panelClips?: ClippedPanel[]
 }
 
 /** Loads-view strut color: tension → blue, compression → red, over → magenta. */
@@ -427,9 +467,12 @@ export function buildDomeGroup(
       group.add(mesh)
     }
 
-    // Trimmed door struts: surviving pieces from hub to buck.
+    // Trimmed door struts: surviving pieces from hub to buck. Framed-panel
+    // has no struts at all (every joint is a doubled seam of frame members,
+    // built below) — the orphan stick mesh would otherwise render alongside
+    // the members with no strut hardware to attach to.
     const trimmed = opts.doorway?.trimmed ?? []
-    if (trimmed.length > 0) {
+    if (!framedPanel && trimmed.length > 0) {
       const mesh = new THREE.InstancedMesh(geo, new THREE.MeshStandardMaterial({
         roughness: isRect ? 0.8 : 0.55,
         metalness: isRect ? 0.05 : 0.25,
@@ -780,26 +823,26 @@ export function buildDomeGroup(
   }
 
   // ---- Framed-panel members: doubled seams via convex clipping ----
-  // Panel units mirror the ring-building logic in engine/panelFrames.ts
-  // (buildPanelFrames) — duplicated here because that function returns a
-  // cut-list plan (jig types), not per-panel world geometry. Keep the two
-  // in sync by hand if the panelization rule ever changes.
+  // Panel units + clip results come straight from the engine
+  // (`panelUnits`/`opts.panelClips`, index-aligned per the shared contract
+  // in `engine/panelClip.ts`) — no local re-derivation to keep in sync.
   if (showStruts && framedPanel && section) {
-    let panelUnits: { ring: number[]; faceIds: number[] }[]
-    if (model.polys) {
-      panelUnits = model.polys.map((p) => ({ ring: [...p.vertexIds], faceIds: [...p.faceIds] }))
-    } else if (model.rhombi) {
-      panelUnits = model.rhombi.map((r) => ({ ring: [...r.vertexIds], faceIds: [...r.faceIds] }))
-      const covered = new Set(model.rhombi.flatMap((r) => r.faceIds))
-      for (const f of model.faces) {
-        if (!covered.has(f.id)) panelUnits.push({ ring: [...f.vertexIds], faceIds: [f.id] })
-      }
-    } else {
-      panelUnits = model.faces.map((f) => ({ ring: [...f.vertexIds], faceIds: [f.id] }))
-    }
-    const kept = panelUnits.filter(
-      (u) => !u.faceIds.some((fid) => opts.doorway?.removedFaces.has(fid)),
-    )
+    const units = panelUnits(model)
+    // Undefined `panelClips` (a caller that hasn't wired Task 3/4 through
+    // yet) falls back to the pre-clip binary test: every unit is either
+    // untouched ('whole') or fully inside a doorway removal ('removed'),
+    // exactly the old `kept` filter's behavior.
+    const clips: ClippedPanel[] =
+      opts.panelClips ??
+      units.map((u, i): ClippedPanel => ({
+        unitIndex: i,
+        ring: u.ring,
+        faceIds: u.faceIds,
+        status: u.faceIds.some((fid) => opts.doorway?.removedFaces.has(fid)) ? 'removed' : 'whole',
+        fragments: [],
+        loops: [],
+        area: 0,
+      }))
 
     const edgeByKey = new Map<string, number>()
     model.edges.forEach((e) =>
@@ -808,18 +851,24 @@ export function buildDomeGroup(
     const baseZ = model.vertices.filter((v) => v.isBase).map((v) => v.position[2])
     const leveledBase = baseZ.length > 0 && Math.max(...baseZ) - Math.min(...baseZ) < 1e-6
 
-    // Pass 1: per-panel outward normal + centroid, and — per model edge id —
-    // the outward normal of every KEPT panel touching it (length 1 on a
-    // boundary edge, or an interior edge with one side omitted by a
-    // doorway; length 2 on a normal interior seam).
-    const panelGeoms = kept.map((u) => {
+    // Pass 1: per-unit outward normal (Newell over the ORIGINAL ring — the
+    // panel's plane doesn't move when it's clipped) for every non-removed
+    // unit, plus its centroid (used directly by the whole-panel path;
+    // clipped loops use their own local centroid in Pass 2 instead).
+    interface UnitPlane {
+      pts3: THREE.Vector3[]
+      normal: THREE.Vector3
+      centroid: THREE.Vector3
+    }
+    const unitPlanes: (UnitPlane | undefined)[] = units.map((u, i) => {
+      if (clips[i].status === 'removed') return undefined
       const pts3 = u.ring.map((vid) => toThree(model.vertices[vid].position, radius))
       let nx = 0
       let ny = 0
       let nz = 0
-      for (let i = 0; i < pts3.length; i++) {
-        const a = pts3[i]
-        const b = pts3[(i + 1) % pts3.length]
+      for (let k = 0; k < pts3.length; k++) {
+        const a = pts3[k]
+        const b = pts3[(k + 1) % pts3.length]
         nx += (a.y - b.y) * (a.z + b.z)
         ny += (a.z - b.z) * (a.x + b.x)
         nz += (a.x - b.x) * (a.y + b.y)
@@ -829,21 +878,10 @@ export function buildDomeGroup(
         .reduce((s, p) => s.add(p), new THREE.Vector3())
         .multiplyScalar(1 / pts3.length)
       if (normal.dot(centroid) < 0) normal.negate() // outward from the dome center (world origin)
-      return { ring: u.ring, pts3, normal, centroid }
+      return { pts3, normal, centroid }
     })
-    const edgeNormals = new Map<number, THREE.Vector3[]>()
-    for (const g of panelGeoms) {
-      const n = g.ring.length
-      for (let i = 0; i < n; i++) {
-        const eid = edgeByKey.get(
-          `${Math.min(g.ring[i], g.ring[(i + 1) % n])}:${Math.max(g.ring[i], g.ring[(i + 1) % n])}`,
-        )
-        if (eid === undefined) continue
-        const arr = edgeNormals.get(eid)
-        if (arr) arr.push(g.normal)
-        else edgeNormals.set(eid, [g.normal])
-      }
-    }
+    const edgeIdFor = (va: number, vb: number): number | undefined =>
+      edgeByKey.get(`${Math.min(va, vb)}:${Math.max(va, vb)}`)
 
     const thickness = sectionW // rect: width; round: OD — in-plane, inward from the edge line
     const depth = sectionD // rect: depth; round: OD — out-of-plane, inward along −normal
@@ -868,24 +906,45 @@ export function buildDomeGroup(
       }
     }
 
-    // Pass 2: one member solid per kept panel per outline edge.
-    for (const g of panelGeoms) {
-      const n = g.ring.length
+    // One member solid per LOOP edge — a whole panel's single outer ring,
+    // or every loop (outer islands + holes) of a clipped panel — flush with
+    // the edge line and panel surface, `thickness` inward in-plane and
+    // `depth` inward along −normal, corners mitered against this loop's own
+    // neighboring edges, seam-planed against the model edge's other kept
+    // panel(s) when it resolves to a real (non-cut) interior edge.
+    // `eidOf(i)` returns the model edge id for loop edge i, -1 when the
+    // edge lies on an opening cut (no model edge, default panel color), or
+    // undefined to skip that edge entirely (the whole-panel path's ring
+    // edges always resolve, so this is purely defensive there).
+    const buildMember = (
+      normal: THREE.Vector3,
+      loopPts: THREE.Vector3[],
+      loopCentroid: THREE.Vector3,
+      isHole: boolean,
+      eidOf: (i: number) => number | undefined,
+    ) => {
+      const n = loopPts.length
       for (let i = 0; i < n; i++) {
-        const va = g.ring[i]
-        const vb = g.ring[(i + 1) % n]
-        const eid = edgeByKey.get(`${Math.min(va, vb)}:${Math.max(va, vb)}`)
+        const eid = eidOf(i)
         if (eid === undefined) continue
-        const edge = model.edges[eid]
-        const a3 = g.pts3[i]
-        const b3 = g.pts3[(i + 1) % n]
+        const edge = eid >= 0 ? model.edges[eid] : undefined
+        const a3 = loopPts[i]
+        const b3 = loopPts[(i + 1) % n]
         const edgeLen = a3.distanceTo(b3)
         if (edgeLen < 1e-9) continue
         const eps = Math.max(edgeLen * 1e-7, Math.min(thickness, depth) * 1e-6)
         const edgeDir = b3.clone().sub(a3).normalize()
         const edgeMid = a3.clone().add(b3).multiplyScalar(0.5)
-        const inward = new THREE.Vector3().crossVectors(g.normal, edgeDir).normalize()
-        if (inward.dot(g.centroid.clone().sub(edgeMid)) < 0) inward.negate()
+        const inward = new THREE.Vector3().crossVectors(normal, edgeDir).normalize()
+        // Outer loops (CCW viewed from outside): `inward` should point
+        // toward the loop's own material, i.e. toward its centroid — same
+        // test as the legacy whole-panel code. Hole loops wind CW, so the
+        // SAME cross product already points INTO the void along their
+        // edges; the member must sit on the panel-material side (outside
+        // the hole), so the flip test is inverted: point AWAY from the
+        // hole's own centroid instead.
+        const pointsTowardCentroid = inward.dot(loopCentroid.clone().sub(edgeMid)) >= 0
+        if (pointsTowardCentroid === isHole) inward.negate()
         const explode =
           explodeDist > 0
             ? edgeMid.clone().normalize().multiplyScalar(explodeDist)
@@ -898,7 +957,7 @@ export function buildDomeGroup(
           pt
             .clone()
             .addScaledVector(inward, uSel * thickness)
-            .addScaledVector(g.normal, -wSel * depth)
+            .addScaledVector(normal, -wSel * depth)
         const aE = a3.clone().addScaledVector(edgeDir, -ext)
         const bE = b3.clone().addScaledVector(edgeDir, ext)
         const A = [corner(aE, 0, 0), corner(aE, 1, 0), corner(aE, 1, 1), corner(aE, 0, 1)]
@@ -916,13 +975,13 @@ export function buildDomeGroup(
         const refPt = edgeMid
           .clone()
           .addScaledVector(inward, thickness / 2)
-          .addScaledVector(g.normal, -depth / 2)
+          .addScaledVector(normal, -depth / 2)
 
-        // (a) Corner-bisector half-spaces: this panel's own two edges meet
+        // (a) Corner-bisector half-spaces: this loop's own two edges meet
         // at each corner and miter against each other, exactly like the
         // mitered-strut fan (plane normal = own edge dir − neighbor dir).
-        const prevPt = g.pts3[(i - 1 + n) % n]
-        const nextPt = g.pts3[(i + 2) % n]
+        const prevPt = loopPts[(i - 1 + n) % n]
+        const nextPt = loopPts[(i + 2) % n]
         const cornerClip = (vertexPos: THREE.Vector3, dThis: THREE.Vector3, dOther: THREE.Vector3) => {
           const cn = dThis.clone().sub(dOther)
           if (cn.lengthSq() < 1e-12) return
@@ -933,11 +992,11 @@ export function buildDomeGroup(
         cornerClip(a3, edgeDir, prevPt.clone().sub(a3).normalize())
         cornerClip(b3, edgeDir.clone().negate(), nextPt.clone().sub(b3).normalize())
 
-        if (edge.faceIds.length === 2) {
+        if (edge && edge.faceIds.length === 2) {
           // (b) Interior edge: seam plane through the edge line, spanned by
           // the edge direction and the average outward normal of the (up
           // to two) kept panels sharing it.
-          const normals = edgeNormals.get(eid) ?? [g.normal]
+          const normals = edgeNormals.get(eid) ?? [normal]
           const avg = normals
             .reduce((s, nn) => s.add(nn), new THREE.Vector3())
             .multiplyScalar(1 / normals.length)
@@ -951,7 +1010,7 @@ export function buildDomeGroup(
             }
           }
         } else if (leveledBase) {
-          // (c) Boundary edge on a leveled base: clip to the foundation
+          // (c) Boundary/cut edge on a leveled base: clip to the foundation
           // plane so the extended member doesn't poke through the floor.
           solid = clipSolid(
             solid,
@@ -961,7 +1020,102 @@ export function buildDomeGroup(
           )
         }
 
-        for (const poly of solid) pushMember(edge.typeId, poly, eid, explode)
+        const typeId = eid >= 0 ? model.edges[eid].typeId : -1
+        for (const poly of solid) pushMember(typeId, poly, eid, explode)
+      }
+    }
+
+    const diameterCache = new Map<number, number>()
+    const unitDiameter = (ui: number, pts3: THREE.Vector3[]): number => {
+      const cached = diameterCache.get(ui)
+      if (cached !== undefined) return cached
+      let d = 0
+      for (let a = 0; a < pts3.length; a++) {
+        for (let b = a + 1; b < pts3.length; b++) d = Math.max(d, pts3[a].distanceTo(pts3[b]))
+      }
+      const result = d || 1e-6
+      diameterCache.set(ui, result)
+      return result
+    }
+
+    // Pre-pass: for every clipped unit, resolve each loop's non-cut edges to
+    // a model edge id ONCE (via `matchRingEdgeIdx`) and register that unit's
+    // normal into `edgeNormals` for exactly the edges it still has — NOT its
+    // full original ring, which could include edges the opening consumed
+    // entirely. Getting this order-independent (every unit's contribution
+    // recorded before ANY unit builds a member) matters: a whole panel's own
+    // interior-seam average (part (b) in `buildMember`) must see every
+    // touching panel's normal regardless of which one happens to iterate
+    // first below.
+    interface LoopData {
+      loopPts: THREE.Vector3[]
+      loopCentroid: THREE.Vector3
+      isHole: boolean
+      eids: number[]
+    }
+    const edgeNormals = new Map<number, THREE.Vector3[]>()
+    const pushEdgeNormal = (eid: number, normal: THREE.Vector3) => {
+      const arr = edgeNormals.get(eid)
+      if (arr) arr.push(normal)
+      else edgeNormals.set(eid, [normal])
+    }
+    const clippedLoopData = new Map<number, LoopData[]>()
+    for (let ui = 0; ui < units.length; ui++) {
+      const clip = clips[ui]
+      const plane = unitPlanes[ui]
+      if (!plane) continue
+      const ring = units[ui].ring
+      if (clip.status === 'whole') {
+        const nR = ring.length
+        for (let k = 0; k < nR; k++) {
+          const eid = edgeIdFor(ring[k], ring[(k + 1) % nR])
+          if (eid !== undefined) pushEdgeNormal(eid, plane.normal)
+        }
+        continue
+      }
+      if (clip.status !== 'clipped') continue
+      const eps = 1e-6 * unitDiameter(ui, plane.pts3)
+      const loopsData: LoopData[] = []
+      for (const loop of clip.loops) {
+        const loopPts = loop.pts.map((p) => new THREE.Vector3(p[0], p[2], -p[1]))
+        const nL = loopPts.length
+        if (nL < 3) continue
+        const loopCentroid = loopPts
+          .reduce((s, p) => s.add(p), new THREE.Vector3())
+          .multiplyScalar(1 / nL)
+        const isHole = loop.cut.every(Boolean)
+        const eids: number[] = new Array(nL)
+        for (let k = 0; k < nL; k++) {
+          if (loop.cut[k]) {
+            eids[k] = -1
+            continue
+          }
+          const idx = matchRingEdgeIdx(plane.pts3, loopPts[k], loopPts[(k + 1) % nL], eps)
+          const eid = idx === undefined ? undefined : edgeIdFor(ring[idx], ring[(idx + 1) % ring.length])
+          eids[k] = eid ?? -1
+          if (eid !== undefined) pushEdgeNormal(eid, plane.normal)
+        }
+        loopsData.push({ loopPts, loopCentroid, isHole, eids })
+      }
+      clippedLoopData.set(ui, loopsData)
+    }
+
+    // Pass 2: whole panels render exactly as before (their ring path);
+    // clipped panels render every loop of every surviving island.
+    for (let ui = 0; ui < units.length; ui++) {
+      const clip = clips[ui]
+      const plane = unitPlanes[ui]
+      if (!plane || clip.status === 'removed') continue
+      if (clip.status === 'whole') {
+        const ring = units[ui].ring
+        const nR = ring.length
+        buildMember(plane.normal, plane.pts3, plane.centroid, false, (i) =>
+          edgeIdFor(ring[i], ring[(i + 1) % nR]),
+        )
+        continue
+      }
+      for (const ld of clippedLoopData.get(ui) ?? []) {
+        buildMember(plane.normal, ld.loopPts, ld.loopCentroid, ld.isHole, (i) => ld.eids[i])
       }
     }
 
@@ -1240,9 +1394,24 @@ export function buildDomeGroup(
     const surface = opts.mode === 'surface'
 
     type PanelKind = 'solid' | OpeningType
+    // Per-unit clip status, keyed by face id: 'whole' units render exactly
+    // as before (per triangle, below); 'clipped' units render their
+    // surviving fragments as their own mesh afterward; 'removed' render
+    // nothing. Falls back to the legacy removedFaces-only filter (every
+    // face effectively 'whole' unless doorway-removed) when the caller
+    // hasn't wired `panelClips` through.
+    const clipByFace = new Map<number, ClippedPanel>()
+    if (opts.panelClips) {
+      for (const c of opts.panelClips) for (const fid of c.faceIds) clipByFace.set(fid, c)
+    }
+    const faceHidden = (fid: number): boolean =>
+      opts.panelClips
+        ? (clipByFace.get(fid)?.status ?? 'whole') !== 'whole'
+        : (opts.doorway?.removedFaces.has(fid) ?? false)
+
     const buckets = new Map<string, { kind: PanelKind; highlight: boolean; faceIds: number[] }>()
     for (const f of model.faces) {
-      if (opts.doorway?.removedFaces.has(f.id)) continue
+      if (faceHidden(f.id)) continue
       const kind: PanelKind = openings[f.id] ?? 'solid'
       const highlight = highlighted.has(f.id)
       const key = `${kind}:${highlight}`
@@ -1331,6 +1500,56 @@ export function buildDomeGroup(
       mesh.name = `panels-${bucket.kind}${bucket.highlight ? '-hl' : ''}`
       pick.panelMaps.set(mesh, faceMap)
       group.add(mesh)
+    }
+
+    // ---- Clipped units: fan-triangulated surviving fragments ----
+    // One mesh per unit, named for its index — non-pickable (no entry in
+    // `pick.panelMaps`; a clipped fragment isn't a whole face, so there's
+    // no single faceId to report back on raycast).
+    if (opts.panelClips) {
+      for (const c of opts.panelClips) {
+        if (c.status !== 'clipped' || c.fragments.length === 0) continue
+        const kind: PanelKind = openings[c.faceIds[0]] ?? 'solid'
+        const highlight = c.faceIds.some((fid) => highlighted.has(fid))
+        const positions: number[] = []
+        for (const frag of c.fragments) {
+          if (frag.length < 3) continue
+          const pts = frag.map((p) => new THREE.Vector3(p[0], p[2], -p[1]))
+          // Fragments are convex and CCW viewed from outside the dome (see
+          // `panelClip.ts`) — same normal formula as the whole-face loop
+          // above, no outward-flip correction needed.
+          const n = new THREE.Vector3()
+            .subVectors(pts[1], pts[0])
+            .cross(new THREE.Vector3().subVectors(pts[2], pts[0]))
+            .normalize()
+          const centroid = pts
+            .reduce((s, p) => s.add(p), new THREE.Vector3())
+            .multiplyScalar(1 / pts.length)
+          const offset =
+            explodeDist > 0
+              ? centroid.clone().normalize().multiplyScalar(explodeDist * 0.8)
+              : null
+          for (const skin of skinOffsets) {
+            const skinned = pts.map((p) => {
+              const q = p.clone().addScaledVector(n, skin)
+              if (offset) q.add(offset)
+              return q
+            })
+            for (let i = 2; i < skinned.length; i++) {
+              for (const pt of [skinned[0], skinned[i - 1], skinned[i]]) {
+                positions.push(pt.x, pt.y, pt.z)
+              }
+            }
+          }
+        }
+        if (positions.length === 0) continue
+        const geo = new THREE.BufferGeometry()
+        geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3))
+        geo.computeVertexNormals()
+        const mesh = new THREE.Mesh(geo, materialFor(kind, highlight))
+        mesh.name = `panel-clipped-${c.unitIndex}`
+        group.add(mesh)
+      }
     }
   }
 

@@ -21,6 +21,7 @@ const {
   riser,
   workingRiserHeight,
   loadsResult,
+  panelClips,
 } = useDomeProject()
 
 const container = ref<HTMLDivElement | null>(null)
@@ -79,6 +80,7 @@ function rebuildDome() {
       state.viewMode === 'loads' && loadsResult.value.ok
         ? loadsResult.value.members.map((m) => ({ forceN: m.forceN, utilization: m.utilization }))
         : undefined,
+    panelClips: panelClips.value,
   })
   scene.add(domeGroup)
 }
@@ -361,6 +363,7 @@ watch(
     state.jointId,
     workingEndOffset.value,
     state.viewMode === 'loads' ? loadsResult.value : null,
+    panelClips.value,
   ],
   () => rebuildDome(),
   { deep: true },

@@ -131,6 +131,30 @@ interface TaggedFrag {
 
 type LoopWithArea = { pts2D: Pt2[]; tags: LineTag[]; signedArea: number }
 
+/** True when every point of `pts` lies inside (or within `eps` of the
+ * boundary of) the convex CCW polygon `container` — a cheap convex
+ * containment test (container's own edges give its inward half-planes
+ * directly; no need for a generic clip). Used to catch a later prism
+ * landing strictly inside an already-recorded hole, so its bite isn't
+ * double-recorded as a second, redundant hole over already-void area. */
+function polygonContainsConvex(container: Pt2[], pts: Pt2[], eps: number): boolean {
+  const n = container.length
+  for (let i = 0; i < n; i++) {
+    const p = container[i]
+    const q = container[(i + 1) % n]
+    const dx = q[0] - p[0]
+    const dy = q[1] - p[1]
+    const len = Math.hypot(dx, dy) || 1
+    const A = dy / len
+    const B = -dx / len
+    const C = A * p[0] + B * p[1]
+    for (const pt of pts) {
+      if (A * pt[0] + B * pt[1] > C + eps) return false
+    }
+  }
+  return true
+}
+
 /** `f` with its point order (and per-edge tags) reversed — used to flip a
  * CCW piece to CW (a hole loop) or to flip a prism's "inside" bite before
  * splicing it into an outer loop as a bridge (see the "Loops" section of
@@ -530,9 +554,17 @@ function clipOneUnit(unit: PanelUnit, unitIndex: number, model: DomeModel, radiu
     isHole: boolean
   }
   let pieces: TrackedFrag[] = [{ pts: outline, tags: outline.map((_, i) => outlineTag(i)), isHole: false }]
+  const containEps = 1e-6 * diameter
   for (let ci = 0; ci < candidates.length; ci++) {
     const planeSet = candidates[ci]
     const ownPrefix = `p:${ci}:`
+    // Existing holes as of *before* this candidate — a non-touching bite
+    // found against a fresh (non-hole) piece only earns a new hole entry if
+    // it isn't already entirely accounted for by one of these. Snapshotting
+    // them here (rather than re-deriving from `nextPieces`, which this
+    // candidate is still building) means a piece this same candidate
+    // notched down doesn't retroactively suppress its own new hole.
+    const existingHoles = pieces.filter((p) => p.isHole)
     const nextPieces: TrackedFrag[] = []
     for (const piece of pieces) {
       let bite: TaggedFrag = piece
@@ -549,7 +581,17 @@ function clipOneUnit(unit: PanelUnit, unitIndex: number, model: DomeModel, radiu
       const touchesBoundary = bite.tags.some((t) => !t.startsWith(ownPrefix))
       if (!touchesBoundary) {
         nextPieces.push(piece)
-        if (!piece.isHole) nextPieces.push({ ...bite, isHole: true })
+        // A non-touching bite off a fresh piece is normally a brand-new
+        // hole — UNLESS this exact area is already void: a later prism
+        // strictly inside an earlier hole (e.g. a small window re-drawn
+        // inside a bigger one already removed) clips to a bite entirely
+        // contained in that hole. Recording it again would double-subtract
+        // area a hole-side check elsewhere already discards as redundant
+        // (see the `piece.isHole` branch just above — this is its mirror
+        // for the non-hole side).
+        if (!piece.isHole && !existingHoles.some((h) => polygonContainsConvex(h.pts, bite.pts, containEps))) {
+          nextPieces.push({ ...bite, isHole: true })
+        }
         continue
       }
       const notched = buildLoopsFromFragments([piece, reverseTaggedFrag(bite)], diameter, areaFloor)

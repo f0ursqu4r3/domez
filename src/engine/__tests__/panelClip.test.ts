@@ -234,6 +234,64 @@ describe('overlapping openings', () => {
     expect(beforeResult.c.area).toBeCloseTo(afterResult.c.area, 6)
     expect(beforeResult.c.loops.length).toBe(afterResult.c.loops.length)
   })
+
+  // Concentric windows (same azimuth, centers aligned so the smaller circle
+  // sits entirely inside the larger one — "same spot", not merely
+  // overlapping): a residual sub-case of the overlap bug survived the first
+  // round of fixes here specifically. Interior holes never notched the
+  // OUTER piece, so when the smaller window's bite landed entirely inside
+  // the bigger window's already-recorded hole, the hole-side check
+  // correctly discarded it as redundant, but the outer-side check
+  // re-recorded the exact same area as a brand-new hole. Confirmed via a
+  // pre-fix run: this exact geometry gave loops=3 (two nested/overlapping
+  // holes) and signedLoopAreaSum ≈ 362.1653 against c.area ≈ 407.2177 —
+  // matching the reviewer's numbers precisely.
+  const bigWindow = { id: 'W1', azimuthDeg: az, width: 16, height: 16, sillHeight: sill, shape: 'circle' as const }
+  // Centered on the same point as bigWindow: sillHeight + height/2 must
+  // match (sill + 8 for the big window), so the small one's sill is offset
+  // by half the height difference rather than reusing `sill` directly.
+  const smallWindow = { id: 'W2', azimuthDeg: az, width: 8, height: 8, sillHeight: sill + 4, shape: 'circle' as const }
+
+  it('a small window strictly inside a bigger window\'s hole does not double-subtract (bigger first)', () => {
+    const finePrisms = openingPrisms(fineDome, [bigWindow, smallWindow], R, { minStubLength: 6 })
+    expect(finePrisms).toHaveLength(2)
+    const c = clipPanels(fineDome, R, finePrisms).find((cc) => cc.unitIndex === 20)!
+    expect(c.status).toBe('clipped')
+
+    const holeLoops = c.loops.filter((l) => l.cut.every(Boolean))
+    for (let i = 0; i < holeLoops.length; i++) {
+      for (let j = i + 1; j < holeLoops.length; j++) {
+        expect(convexOverlapArea(holeLoops[i].pts as [number, number, number][], holeLoops[j].pts as [number, number, number][])).toBeLessThan(1e-6)
+      }
+    }
+    for (const loop of c.loops) assertLoopIntegrity(fineDome, R, panelUnits(fineDome)[c.unitIndex].ring, finePrisms, loop)
+    expect(signedLoopAreaSum(c.loops)).toBeCloseTo(c.area, 3)
+  })
+
+  it('the same concentric pair in reverse order gives an equivalent result', () => {
+    const biggerFirst = clipPanels(fineDome, R, openingPrisms(fineDome, [bigWindow, smallWindow], R, { minStubLength: 6 })).find(
+      (cc) => cc.unitIndex === 20,
+    )!
+    const smallerFirst = clipPanels(fineDome, R, openingPrisms(fineDome, [smallWindow, bigWindow], R, { minStubLength: 6 })).find(
+      (cc) => cc.unitIndex === 20,
+    )!
+    for (const c of [biggerFirst, smallerFirst]) {
+      expect(c.status).toBe('clipped')
+      expect(signedLoopAreaSum(c.loops)).toBeCloseTo(c.area, 3)
+    }
+    expect(biggerFirst.area).toBeCloseTo(smallerFirst.area, 6)
+    expect(biggerFirst.loops.length).toBe(smallerFirst.loops.length)
+    // Order shouldn't change which loops are holes vs. outer, or their areas.
+    const holeAreas = (c: (typeof biggerFirst)) =>
+      c.loops
+        .filter((l) => l.cut.every(Boolean))
+        .map((l) => polyArea3(l.pts as [number, number, number][]))
+        .sort((a, b) => a - b)
+    const a = holeAreas(biggerFirst)
+    const b = holeAreas(smallerFirst)
+    expect(a).toHaveLength(b.length)
+    for (let i = 0; i < a.length; i++) expect(a[i]).toBeCloseTo(b[i], 3)
+  })
 })
 
 /** Diameter of a panel unit's ring (max pairwise vertex distance, world

@@ -857,14 +857,17 @@ export function cutDoorways(
       }
       closureTunnel = strips
 
-      // closureSideArea: trapezoid integral of max(0, uShell − framePlaneDist)
-      // along each edge (TUNNEL_STATIONS − 1 spans).
+      // closureSideArea: trapezoid integral of |uShell − framePlaneDist|
+      // along each edge (TUNNEL_STATIONS − 1 spans). Absolute: a recessed
+      // buck seals shell → inward, a projecting one (negative depth) seals
+      // shell → outward; stations where the radial line misses the shell
+      // (uShell 0, open air) contribute nothing.
       for (const strip of strips) {
         const edgeLen = Math.hypot(strip.b[0] - strip.a[0], strip.b[1] - strip.a[1])
         const spanLen = edgeLen / (TUNNEL_STATIONS - 1)
         for (let s = 1; s < TUNNEL_STATIONS; s++) {
-          const v0 = Math.max(0, strip.uShell[s - 1] - framePlaneDist)
-          const v1 = Math.max(0, strip.uShell[s] - framePlaneDist)
+          const v0 = strip.uShell[s - 1] > 1e-9 ? Math.abs(strip.uShell[s - 1] - framePlaneDist) : 0
+          const v1 = strip.uShell[s] > 1e-9 ? Math.abs(strip.uShell[s] - framePlaneDist) : 0
           closureSideArea += ((v0 + v1) / 2) * spanLen
         }
       }
@@ -892,7 +895,10 @@ export function cutDoorways(
             const hRel = a[1] + (b[1] - a[1]) * frac
             const uShellExact = radialShellDistance(tris, t, z0 + hRel)
             const length = Math.abs(uShellExact - framePlaneDist)
-            if (length >= opts.minStubLength) {
+            // Blocking spans buck plane → shell in whichever direction the
+            // shell lies (recessed: outward; projecting buck: inward). Skip
+            // stations whose radial line misses the shell entirely.
+            if (uShellExact > 1e-9 && length >= opts.minStubLength) {
               closureFraming.push({
                 part: 'ring blocking',
                 length,
@@ -901,7 +907,7 @@ export function cutDoorways(
                 a: [t, hRel],
                 b: [t, hRel],
                 ua: framePlaneDist,
-                ub: framePlaneDist + length,
+                ub: uShellExact,
               })
             }
           }

@@ -151,6 +151,32 @@ describe('shaped buck + tunnel closure', () => {
     expect(cutR.doors[0].buckMembers.map((m) => m.part)).toEqual(['jamb', 'header'])
     expect(cutR.doors[0].shape).toBe('rect')
   })
+
+  it('projecting buck (negative depth): blocking runs back TO the shell, area counted', () => {
+    // extraDepth −20 pushes the buck plane 20 units past the auto fit — the
+    // shell now sits BEHIND the buck plane (uShell < framePlaneDist), like a
+    // porthole proud of the skin. Blocking must span buck plane → shell
+    // (inward), not mirror outward into open air.
+    const proud = { ...circle, extraDepth: -20 }
+    const cutP = cutDoorways(dome, [proud], R, { minStubLength: 6, studSpacing: 16 })
+    const wp = cutP.doors[0]
+    expect(wp.fits).toBe(true)
+    const blocking = wp.closureFraming.filter((m) => m.part === 'ring blocking')
+    expect(blocking.length).toBeGreaterThan(0)
+    for (const m of blocking) {
+      // The bar spans buck plane → shell in whichever direction the shell
+      // lies; its radial extent equals the reported cut length exactly.
+      expect(Math.abs(m.ua! - m.ub!)).toBeCloseTo(m.length, 9)
+      expect(m.ub!).toBeGreaterThan(0)
+    }
+    // With the buck 20 units proud, the shell sits BEHIND the buck plane
+    // over the upper part of the porthole — at least some bars must run
+    // inward (ub < ua). The pre-fix code mirrored every bar outward
+    // (ub = ua + length), so none did.
+    expect(blocking.some((m) => m.ub! < m.ua!)).toBe(true)
+    // The projecting closure has real sheathing area (shell → buck plane).
+    expect(wp.closureSideArea).toBeGreaterThan(0)
+  })
 })
 
 describe('window bottom clip clamps to the base plane (regression)', () => {

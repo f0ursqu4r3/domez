@@ -146,9 +146,13 @@ export function buildBom(
     }
     return p
   }
+  // `panelPlan.clipped` items are stored unscaled (unlike types/rects/
+  // rhombs/polys, whose `count` already carries `skinFactor` — see
+  // `planPanels`, which only applies `skinFactor` to clipped's aggregate
+  // totals, not per-item) — scale the perimeter contribution here to match.
   for (const c of panelPlan.clipped) {
-    perimeter += loopPerimeter(c.outline)
-    for (const h of c.holes) perimeter += loopPerimeter(h)
+    const piecePerimeter = loopPerimeter(c.outline) + c.holes.reduce((s, h) => s + loopPerimeter(h), 0)
+    perimeter += piecePerimeter * panelPlan.skinFactor
   }
   if (perimeter > 0) {
     const inches = panelPlan.sheetW < 100 // sheet sized in inches vs mm

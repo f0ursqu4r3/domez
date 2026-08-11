@@ -528,36 +528,63 @@ describe('final-review fixes: sill footnote / bom clipped perimeter / cut_edge c
     expect(svg).toContain('scribe to grade')
   })
 
+  const clippedPiece = {
+    label: 'X1',
+    outline: [
+      [0, 0],
+      [20, 0],
+      [20, 20],
+      [0, 20],
+    ] as [number, number][],
+    holes: [
+      [
+        [5, 5],
+        [15, 5],
+        [15, 15],
+        [5, 15],
+      ] as [number, number][],
+    ],
+    trueArea: 300,
+    bboxW: 20,
+    bboxH: 20,
+    seamed: false,
+  }
+
   it('BOM panel screws count includes clipped-panel outline + hole perimeter', () => {
     const m = generateDome({ frequency: 3, fraction: '1/2', baseMode: 'leveled' })
     const basePlan = planPanels(m, R, { sheetW: 48, sheetL: 96, sheetLabel: '4×8', skinFactor: 1 })
-    const clippedPiece = {
-      label: 'X1',
-      outline: [
-        [0, 0],
-        [20, 0],
-        [20, 20],
-        [0, 20],
-      ] as [number, number][],
-      holes: [
-        [
-          [5, 5],
-          [15, 5],
-          [15, 15],
-          [5, 15],
-        ] as [number, number][],
-      ],
-      trueArea: 300,
-      bboxW: 20,
-      bboxH: 20,
-      seamed: false,
-    }
     const planWithClip = { ...basePlan, clipped: [clippedPiece] }
     const bomBase = buildBom(m, NO_DOOR, null, 'hub', basePlan)
     const bomClip = buildBom(m, NO_DOOR, null, 'hub', planWithClip)
     const screwsBase = bomBase.find((l) => l.key === 'screw-panel')?.quantity ?? 0
     const screwsClip = bomClip.find((l) => l.key === 'screw-panel')!.quantity
     expect(screwsClip).toBeGreaterThan(screwsBase)
+  })
+
+  it('BOM clipped-panel screw contribution scales with skinFactor (double-skin doubles it)', () => {
+    // Regression: `panelPlan.clipped` items are stored UNSCALED by
+    // `planPanels` (unlike types/rects/rhombs/polys, whose `count` already
+    // carries `skinFactor`) — the BOM's clipped-perimeter term must apply
+    // `skinFactor` itself, or a double-skin dome silently under-orders
+    // panel screws for every opening by half. Isolate the clipped piece's
+    // own contribution (clip total minus the no-clip baseline) at
+    // skinFactor 1 and 2 on the same golden 3V leveled dome, and confirm it
+    // doubles — the exact 15 → 30 empirical check from re-review.
+    const m = generateDome({ frequency: 3, fraction: '1/2', baseMode: 'leveled' })
+    const screwsFor = (skinFactor: 1 | 2) => {
+      const basePlan = planPanels(m, R, { sheetW: 48, sheetL: 96, sheetLabel: '4×8', skinFactor })
+      const planWithClip = { ...basePlan, clipped: [clippedPiece] }
+      const bomBase = buildBom(m, NO_DOOR, null, 'hub', basePlan)
+      const bomClip = buildBom(m, NO_DOOR, null, 'hub', planWithClip)
+      const screwsBase = bomBase.find((l) => l.key === 'screw-panel')?.quantity ?? 0
+      const screwsClip = bomClip.find((l) => l.key === 'screw-panel')!.quantity
+      return screwsClip - screwsBase
+    }
+    const delta1 = screwsFor(1)
+    const delta2 = screwsFor(2)
+    expect(delta1).toBe(15)
+    expect(delta2).toBe(30)
+    expect(delta2).toBe(2 * delta1)
   })
 
   it('framesCsv adds a cut_edge column: yes for opening-interface members, blank otherwise', () => {

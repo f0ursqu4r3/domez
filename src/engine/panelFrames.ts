@@ -1,6 +1,6 @@
 import type { DomeModel, UnitSystem, Vec3 } from './types'
 import type { DoorwayCut } from './doorway'
-import { clipPanels, panelUnits, type ClippedLoop, type ClippedPanel } from './panelClip'
+import { panelUnits, type ClippedLoop, type ClippedPanel } from './panelClip'
 
 /** One distinct member cut within a frame type. */
 export interface FrameMemberSpec {
@@ -119,11 +119,17 @@ export function buildPanelFrames(
 ): PanelFramePlan {
   // ---- Panel units: outline rings + owning faces (index-aligned with `clips`) ----
   const unitsAll = panelUnits(model)
-  // Callers may pass `[]` as a "no openings" shorthand (e.g. skipping the
-  // clip pass entirely when there are no doors/windows) — treat any clips
-  // array that isn't actually index-aligned with `unitsAll` as exactly that,
-  // and derive the real (all-'whole') clip set ourselves.
-  if (clips.length !== unitsAll.length) clips = clipPanels(model, radius, [])
+  // `clips` MUST be index-aligned with `panelUnits(model)` — every caller,
+  // including the no-portal case, is expected to have called
+  // `clipPanels(model, radius, prisms)` (an empty `prisms` array still
+  // returns one 'whole' entry per unit via its fast path, so there's no
+  // "just pass []" shorthand). A mismatch is a caller bug, not something to
+  // paper over silently.
+  if (clips.length !== unitsAll.length) {
+    throw new Error(
+      `buildPanelFrames: clips.length (${clips.length}) does not match panelUnits(model).length (${unitsAll.length}) — clips must come from clipPanels(model, radius, prisms) for this exact model`,
+    )
+  }
 
   // ---- Edge lookup + leveled-base detection ----
   const edgeByKey = new Map<string, number>()
@@ -376,7 +382,29 @@ export function buildPanelFrames(
     return { pts2D, corners, edges }
   }
 
-  const xTypes: FrameType[] = clippedUnitIndices.map((unitIndex, xi) => {
+  // A clipped panel can split into more than one disjoint surviving island
+  // (e.g. a narrow door slitting a panel edge-to-edge, leaving two separate
+  // slivers, neither of which is a "hole" — both retain original outline
+  // edges). Every non-hole loop is therefore its own island/X-type, not
+  // just the largest one; a hole loop is assigned to whichever island's
+  // outline actually contains it (point-in-polygon on the shared 2D
+  // projection), since a bite can only ever land fully inside one island.
+  const pointInPolygon = (pt: readonly [number, number], poly: readonly [number, number][]): boolean => {
+    let inside = false
+    const n = poly.length
+    for (let i = 0, j = n - 1; i < n; j = i++) {
+      const [xi, yi] = poly[i]
+      const [xj, yj] = poly[j]
+      if (yi > pt[1] !== yj > pt[1]) {
+        const xIntersect = xi + ((pt[1] - yi) / (yj - yi)) * (xj - xi)
+        if (pt[0] < xIntersect) inside = !inside
+      }
+    }
+    return inside
+  }
+
+  const islands: { outerGeom: LoopGeom; holeGeoms: LoopGeom[] }[] = []
+  for (const unitIndex of clippedUnitIndices) {
     const unit = unitsAll[unitIndex]
     const ringPts = unitRingPts[unitIndex]
     const basis = ringBasis(ringPts)
@@ -384,12 +412,36 @@ export function buildPanelFrames(
     const clip = clips[unitIndex]
 
     const isHoleLoop = (l: ClippedLoop) => l.cut.every(Boolean)
-    const outerLoop = clip.loops.find((l) => !isHoleLoop(l)) ?? clip.loops[0]
-    const holeLoops = clip.loops.filter((l) => l !== outerLoop && isHoleLoop(l))
+    const loopGeoms = clip.loops.map((l) => ({
+      isHole: isHoleLoop(l),
+      geom: buildLoopGeom(l, unit.ring, ringPts, basis, eps),
+    }))
+    let outers = loopGeoms.filter((e) => !e.isHole)
+    let holes = loopGeoms.filter((e) => e.isHole)
+    if (outers.length === 0) {
+      // Degenerate: every loop's edges are all cut (shouldn't happen for a
+      // genuinely 'clipped' panel, which always retains some original
+      // outline edge somewhere) — fall back to the largest loop (loops are
+      // area-sorted) as the outline rather than dropping the panel.
+      outers = [loopGeoms[0]]
+      holes = loopGeoms.slice(1).filter((e) => e.isHole)
+    }
+    const holeBuckets: LoopGeom[][] = outers.map(() => [])
+    for (const h of holes) {
+      const testPt = h.geom.pts2D[0]
+      let assigned = 0
+      for (let i = 0; i < outers.length; i++) {
+        if (pointInPolygon(testPt, outers[i].geom.pts2D)) {
+          assigned = i
+          break
+        }
+      }
+      holeBuckets[assigned].push(h.geom)
+    }
+    outers.forEach((o, i) => islands.push({ outerGeom: o.geom, holeGeoms: holeBuckets[i] }))
+  }
 
-    const outerGeom = buildLoopGeom(outerLoop, unit.ring, ringPts, basis, eps)
-    const holeGeoms = holeLoops.map((l) => buildLoopGeom(l, unit.ring, ringPts, basis, eps))
-
+  const xTypes: FrameType[] = islands.map(({ outerGeom, holeGeoms }, xi) => {
     // Dedupe identical member cuts across every loop edge (outline + holes).
     const specs = new Map<string, FrameMemberSpec>()
     const keyOf = (

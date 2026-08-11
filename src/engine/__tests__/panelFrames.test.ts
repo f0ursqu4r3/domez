@@ -344,4 +344,66 @@ describe('panel frames: clip-driven X-types + overlap seams', () => {
     // "every seam gets at least 2 bolts" expressed through the plan totals.
     expect(plan.boltCount).toBeGreaterThanOrEqual(2 * plan.seamCount)
   })
+
+  it('a panel split into two disjoint islands by a narrow door produces two X-types, not one', () => {
+    // Task 2's own "two-piece split" repro (panelClip.test.ts): a narrow,
+    // full-height, zero-margin door cuts a Z10 rhombus edge-to-edge,
+    // leaving two separate triangular slivers — neither is a hole (both
+    // keep original outline edges), so this is exactly the "multiple
+    // non-hole islands in one clipped panel" case a single-outline X-type
+    // would otherwise drop one of.
+    const z10 = generateZome({ sides: 10, pitchDeg: 45, rows: 5, baseMode: 'leveled' })
+    const narrowDoor = { id: 'D1', azimuthDeg: 20, width: 12, height: 100, margin: 0 }
+    const prisms = openingPrisms(z10, [narrowDoor], R, { minStubLength: 6 })
+    const clips = clipPanels(z10, R, prisms)
+    const splitUnitIndex = clips.findIndex(
+      (c) => c.status === 'clipped' && c.fragments.length === 2 && c.loops.length === 2,
+    )
+    expect(splitUnitIndex).toBeGreaterThanOrEqual(0)
+    const splitClip = clips[splitUnitIndex]
+    expect(splitClip.loops.every((l) => l.pts.length === 3)).toBe(true) // two triangles
+
+    const cut = cutDoorways(z10, [narrowDoor], R, { minStubLength: 6 })
+    const plan = buildPanelFrames(z10, R, 'imperial', cut, clips)
+    const xTypes = plan.types.filter((t) => t.siteFit)
+
+    // The split unit must surface as exactly two triangular (3-sided)
+    // X-types — one per surviving island — not one (with the other
+    // island's edges silently dropped) and not merged into a single type
+    // (panelCount must stay 1; these are two distinct site-fit pieces).
+    const triangleXTypes = xTypes.filter((t) => t.sides === 3)
+    expect(triangleXTypes.length).toBe(2)
+    for (const t of triangleXTypes) {
+      expect(t.panelCount).toBe(1)
+      expect(t.siteFit).toBe(true)
+      expect(t.outline.length).toBe(3)
+    }
+    // Both islands' loop edges (3 + 3 = 6) are fully accounted for in
+    // members — none dropped, none double-counted.
+    const triangleMemberSum = triangleXTypes.reduce(
+      (s, t) => s + t.members.reduce((ss, m) => ss + m.count, 0),
+      0,
+    )
+    expect(triangleMemberSum).toBe(6)
+
+    // Model-wide: every X-type's own edge total (outline + holes) sums to
+    // exactly the total loop-edge count across every clipped panel — no
+    // island of any clipped panel anywhere loses edges to this bug class.
+    const xTypeEdgeTotal = xTypes.reduce(
+      (s, t) => s + t.sides + (t.holes ?? []).reduce((hs, h) => hs + h.length, 0),
+      0,
+    )
+    const clippedLoopEdgeTotal = clips
+      .filter((c) => c.status === 'clipped')
+      .reduce((s, c) => s + c.loops.reduce((ss, l) => ss + l.pts.length, 0), 0)
+    expect(xTypeEdgeTotal).toBe(clippedLoopEdgeTotal)
+
+    // plan.totalMembers folds every type's full edge count (F- and
+    // X-types alike) — re-derive it independently and confirm it matches.
+    const expectedTotalMembers = plan.types.reduce(
+      (s, t) => s + t.panelCount * (t.sides + (t.holes ?? []).reduce((hs, h) => hs + h.length, 0)),
+      0,
+    )
+    expect(plan.totalMembers).toBe(expectedTotalMembers)
+  })
 })

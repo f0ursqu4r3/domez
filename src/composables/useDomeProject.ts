@@ -538,20 +538,22 @@ const doorway = computed(() =>
       }),
 )
 
-/** Panel-vs-opening clip results: index-aligned with `panelUnits(model)`.
- * Shared by the frame takeoff and (Tasks 4–5) the viewer + panel plan, so
- * every consumer sees the same clipped geometry for the current portals. */
+/** Panel-vs-opening clip results: index-aligned with `panelUnits(model)`,
+ * always — with no portals, `openingPrisms` returns `[]` and `clipPanels`
+ * takes its fast path, returning one 'whole' entry per unit (cheap; no
+ * special-cased shorthand here so the index-alignment contract always
+ * holds for every consumer). Shared by the frame takeoff and (Tasks 4–5)
+ * the viewer + panel plan, so every consumer sees the same clipped
+ * geometry for the current portals. */
 const panelClips = computed(() =>
-  portalSpecs.value.length === 0
-    ? []
-    : clipPanels(
-        model.value,
-        radius.value,
-        openingPrisms(model.value, portalSpecs.value, radius.value, {
-          minStubLength: minStubLength.value,
-          riserHeight: workingRiserHeight.value,
-        }),
-      ),
+  clipPanels(
+    model.value,
+    radius.value,
+    openingPrisms(model.value, portalSpecs.value, radius.value, {
+      minStubLength: minStubLength.value,
+      riserHeight: workingRiserHeight.value,
+    }),
+  ),
 )
 
 /** Framed-panel ("double wall") joint takeoff — independent per-panel jigs

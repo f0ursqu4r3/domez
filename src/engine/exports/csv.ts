@@ -127,14 +127,26 @@ export function openingsCsv(
     ),
   ]
   for (const d of doors) {
+    // Frame-out lists every rough-buck member (jamb/header/sill for rect,
+    // arch/rim/rake members for the other shapes) straight from the door's
+    // real buckMembers — the single source of buck framing for all shapes.
+    const frameOut = d.buckMembers
+      .map((m) => `${m.quantity}× ${m.part} ${m.length.toFixed(1)}`)
+      .join(', ')
+    // Perimeter sums the same members. Rect doors/windows keep the legacy
+    // 2×jamb + header value exactly (excluding the sill, which the old
+    // hardcoded formula never counted); shaped openings sum every member.
+    const isRect = (d.shape ?? 'rect') === 'rect'
+    const perimeterMembers = isRect ? d.buckMembers.filter((m) => m.part !== 'sill') : d.buckMembers
+    const perimeter = perimeterMembers.reduce((sum, m) => sum + m.quantity * m.length, 0)
     lines.push(
       row(
         d.id,
         'doorway',
         `${d.width.toFixed(1)} × ${d.height.toFixed(1)} ${unit} @ ${d.azimuthDeg}°`,
         areaOf(d.area).toFixed(2),
-        (2 * d.height + d.width).toFixed(2),
-        `2× jamb ${d.jambLength.toFixed(1)}, 1× header ${d.headerLength.toFixed(1)}`,
+        perimeter.toFixed(2),
+        frameOut,
         `${d.removedStrutCount} removed, ${d.trimmedStrutCount} trimmed, ${d.removedHubCount} hubs out`,
         d.fits
           ? `buck inset ${d.tunnelDepth.toFixed(1)} ${unit}; closure sides ${areaOf(d.closureSideArea).toFixed(2)} + top ${areaOf(d.closureTopArea).toFixed(2)} ${areaUnit}`

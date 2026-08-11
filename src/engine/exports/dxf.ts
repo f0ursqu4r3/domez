@@ -41,12 +41,13 @@ export function fabricationDxf(model: DomeModel, cutList: CutList, radius: numbe
     line('struts', 0, y, r.roundedCutLength, y)
     line('struts', 0, y - gap * 0.15, 0, y + gap * 0.15)
     line('struts', r.roundedCutLength, y - gap * 0.15, r.roundedCutLength, y + gap * 0.15)
+    const axialClause = Number.isNaN(r.axialAngleDeg) ? '' : `  axial=${r.axialAngleDeg.toFixed(2)}deg`
     text(
       'struts',
       0,
       y + gap * 0.2,
       gap * 0.18,
-      `${r.label} x${r.quantity}  L=${r.roundedCutLength.toFixed(3)}  axial=${r.axialAngleDeg.toFixed(2)}deg`,
+      `${r.label} x${r.quantity}  L=${r.roundedCutLength.toFixed(3)}${axialClause}`,
     )
   })
 

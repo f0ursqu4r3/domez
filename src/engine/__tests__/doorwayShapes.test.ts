@@ -3,6 +3,8 @@ import { generateDome } from '../dome'
 import { cutDoorways, optimizeDoorPlacement } from '../doorway'
 import { buildCutList } from '../cutlist'
 import { planSvg } from '../exports/plan'
+import { fabricationDxf } from '../exports/dxf'
+import { openingsCsv } from '../exports/csv'
 import type { DomeModel } from '../types'
 
 const R = 156
@@ -273,5 +275,29 @@ describe('shaped exports', () => {
     const cut = cutDoorways(dome, [circle], R, { minStubLength: 6 })
     const svg = planSvg(dome, cut, { units: 'imperial', radius: R, riserHeight: 0, wallThickness: 3.5, title: 't' })
     expect(svg).toContain('⌀')
+  })
+  it('fabrication DXF never prints NaN (rect buck rows carry axialAngleDeg: NaN for square cuts)', () => {
+    const cut = cutDoorways(dome, [door], R, { minStubLength: 6 })
+    const list = buildCutList(dome, { radius: R, increment: 0.125, endOffset: 0, units: 'imperial' }, cut)
+    const dxf = fabricationDxf(dome, list, R)
+    expect(dxf).not.toContain('NaN')
+  })
+  it('openings CSV: a circle window frame-out lists rim segments, not zeroed jamb/header', () => {
+    const circle = { id: 'W1', azimuthDeg: 15, width: 40, height: 40, sillHeight: 48, shape: 'circle' as const }
+    const cut = cutDoorways(dome, [circle], R, { minStubLength: 6 })
+    const csv = openingsCsv([], cut.doors, 'imperial')
+    const w1Row = csv.split('\n').find((l) => l.startsWith('W1,'))!
+    expect(w1Row).toContain('rim segment')
+    expect(w1Row).not.toContain('jamb 0')
+  })
+  it('openings CSV: a rect door row is unchanged vs the legacy frame-out/perimeter format', () => {
+    const cut = cutDoorways(dome, [door], R, { minStubLength: 6 })
+    const csv = openingsCsv([], cut.doors, 'imperial')
+    const d1Row = csv.split('\n').find((l) => l.startsWith('D1,'))!
+    // Legacy: `2× jamb ${jambLength}, 1× header ${headerLength}` and
+    // perimeter `2*height + width` — door.jambLength === height (80),
+    // door.headerLength === width (36), no sill on a door.
+    expect(d1Row).toContain('2× jamb 80.0, 1× header 36.0')
+    expect(d1Row).toContain((2 * door.height + door.width).toFixed(2))
   })
 })

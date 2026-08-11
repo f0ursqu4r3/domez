@@ -1409,7 +1409,7 @@ export function optimizeDoorPlacement(
   // ---- Fine pass: stepDeg azimuth grid over ±2° and band/50 sill grid over
   // ±band/12, centered on the coarse winner. ----
   const nAzFine = Math.round(FINE_HALF_WIDTH_DEG / fineStepAz)
-  const nSillFine = useSillAxis ? Math.round(coarseStepSill / fineStepSill) : 0
+  const nSillFine = useSillAxis ? Math.ceil(coarseStepSill / fineStepSill) : 0
   const sillFineOffsets = useSillAxis
     ? Array.from({ length: nSillFine * 2 + 1 }, (_, k) => (k - nSillFine) * fineStepSill)
     : [0]

@@ -77,6 +77,20 @@ const polyArea3 = (pts: [number, number, number][]) => {
 const unitArea = (ring: number[]) =>
   polyArea3(ring.map((vi) => dome.vertices[vi].position.map((c) => c * R) as [number, number, number]))
 
+/** Signed sum of a panel's loop areas — outer loops (not every edge cut)
+ * contribute positively, hole loops (every edge cut) negatively. This is
+ * the quantity that must equal `c.area` regardless of how many opening
+ * prisms overlap: double-recording an overlap as two separate hole loops,
+ * or leaving a hole loop floating inside a notch that already swallowed
+ * it, both throw this sum off while `c.area` (derived from `fragments`,
+ * not `loops`) stays correct — see the "overlapping openings" tests. */
+const signedLoopAreaSum = (loops: { pts: readonly (readonly number[])[]; cut: readonly boolean[] }[]) =>
+  loops.reduce((s, l) => {
+    const mag = polyArea3(l.pts as [number, number, number][])
+    const isHole = l.cut.every(Boolean)
+    return s + (isHole ? -mag : mag)
+  }, 0)
+
 describe('clipPanels', () => {
   const prisms = openingPrisms(dome, [door], R, { minStubLength: 6 })
   const clips = clipPanels(dome, R, prisms)
@@ -158,6 +172,70 @@ describe('clipPanels', () => {
   })
 })
 
+// Regression coverage for the overlapping-prisms bug: a hole recorded
+// against one prism used to be exempt from every later prism's clip, so a
+// second prism overlapping it either double-recorded the overlap as two
+// separate (overlapping) hole loops, or left a hole loop floating inside a
+// notch that already swallowed it whole — in both cases `fragments`/`area`
+// stayed correct (they never went through the hole-tracking path) while
+// `loops` silently lied. `signedLoopAreaSum` must equal `c.area` regardless.
+describe('overlapping openings', () => {
+  const { az, sill } = panelCentroidSpot(fineDome, R)
+
+  it('two overlapping interior circle windows on one facet merge into non-overlapping holes', () => {
+    const win1 = { id: 'W1', azimuthDeg: az, width: 10, height: 10, sillHeight: sill, shape: 'circle' as const }
+    const win2 = { id: 'W2', azimuthDeg: az + 2, width: 10, height: 10, sillHeight: sill, shape: 'circle' as const }
+    const finePrisms = openingPrisms(fineDome, [win1, win2], R, { minStubLength: 6 })
+    expect(finePrisms).toHaveLength(2)
+    const fineClips = clipPanels(fineDome, R, finePrisms)
+    const c = fineClips.find((cc) => cc.unitIndex === 20)!
+    expect(c.status).toBe('clipped')
+    expect(c.loops.length).toBeGreaterThan(1) // an outer loop plus at least one hole
+
+    const holeLoops = c.loops.filter((l) => l.cut.every(Boolean))
+    expect(holeLoops.length).toBeGreaterThanOrEqual(1)
+    // No two hole loops may overlap — each is convex (a clean prism bite or
+    // a piece already notched against every other tracked piece), so a
+    // cheap pairwise Sutherland–Hodgman clip in the panel's own 2D basis
+    // catches any residual double-subtraction directly, independent of the
+    // area check below.
+    for (let i = 0; i < holeLoops.length; i++) {
+      for (let j = i + 1; j < holeLoops.length; j++) {
+        expect(convexOverlapArea(holeLoops[i].pts as [number, number, number][], holeLoops[j].pts as [number, number, number][])).toBeLessThan(1e-6)
+      }
+    }
+    for (const loop of c.loops) assertLoopIntegrity(fineDome, R, panelUnits(fineDome)[c.unitIndex].ring, finePrisms, loop)
+    expect(signedLoopAreaSum(c.loops)).toBeCloseTo(c.area, 3)
+  })
+
+  it('a window listed before the door that swallows it leaves no floating hole (order-independent)', () => {
+    const win = { id: 'W1', azimuthDeg: az, width: 10, height: 10, sillHeight: sill, shape: 'circle' as const }
+    const door = { id: 'D1', azimuthDeg: az, width: 30, height: 80, margin: 2 }
+
+    const beforeResult = (() => {
+      const finePrisms = openingPrisms(fineDome, [win, door], R, { minStubLength: 6 })
+      const c = clipPanels(fineDome, R, finePrisms).find((cc) => cc.unitIndex === 20)!
+      return { c, finePrisms }
+    })()
+    const afterResult = (() => {
+      const finePrisms = openingPrisms(fineDome, [door, win], R, { minStubLength: 6 })
+      const c = clipPanels(fineDome, R, finePrisms).find((cc) => cc.unitIndex === 20)!
+      return { c, finePrisms }
+    })()
+
+    for (const { c, finePrisms } of [beforeResult, afterResult]) {
+      expect(c.status).toBe('clipped')
+      // No hole loop should survive floating inside the swallowed notch.
+      expect(c.loops.some((l) => l.cut.every(Boolean))).toBe(false)
+      for (const loop of c.loops) assertLoopIntegrity(fineDome, R, panelUnits(fineDome)[c.unitIndex].ring, finePrisms, loop)
+      expect(signedLoopAreaSum(c.loops)).toBeCloseTo(c.area, 3)
+    }
+    // The window's prior order shouldn't change the outcome at all.
+    expect(beforeResult.c.area).toBeCloseTo(afterResult.c.area, 6)
+    expect(beforeResult.c.loops.length).toBe(afterResult.c.loops.length)
+  })
+})
+
 /** Diameter of a panel unit's ring (max pairwise vertex distance, world
  * scale) — matches the relative tolerance panelClip.ts uses internally. */
 function ringDiameter(model: DomeModel, ring: number[], radius: number): number {
@@ -180,6 +258,66 @@ function distToSegment3(p: [number, number, number], a: [number, number, number]
   t = Math.max(0, Math.min(1, t))
   const c: [number, number, number] = [a[0] + t * ab[0], a[1] + t * ab[1], a[2] + t * ab[2]]
   return Math.hypot(p[0] - c[0], p[1] - c[1], p[2] - c[2])
+}
+
+/** Area of the overlap between two convex, coplanar 3D polygons (both loops
+ * of the same panel share the panel's plane), independent of orientation.
+ * Projects both onto a 2D basis derived from `a`, normalizes each to CCW,
+ * then clips `a` against every edge of `b` as a half-plane (Sutherland–
+ * Hodgman; valid since `b` is convex) and returns the surviving area. */
+function convexOverlapArea(a: readonly (readonly number[])[], b: readonly (readonly number[])[]): number {
+  const p0 = a[0], p1 = a[1], p2 = a[a.length - 1]
+  const e1raw = [p1[0] - p0[0], p1[1] - p0[1], p1[2] - p0[2]]
+  const e2raw = [p2[0] - p0[0], p2[1] - p0[1], p2[2] - p0[2]]
+  const nrm = [
+    e1raw[1] * e2raw[2] - e1raw[2] * e2raw[1],
+    e1raw[2] * e2raw[0] - e1raw[0] * e2raw[2],
+    e1raw[0] * e2raw[1] - e1raw[1] * e2raw[0],
+  ]
+  const nl = Math.hypot(nrm[0], nrm[1], nrm[2]) || 1
+  const n = nrm.map((c) => c / nl)
+  const e1l = Math.hypot(e1raw[0], e1raw[1], e1raw[2]) || 1
+  const e1 = e1raw.map((c) => c / e1l)
+  const e2 = [n[1] * e1[2] - n[2] * e1[1], n[2] * e1[0] - n[0] * e1[2], n[0] * e1[1] - n[1] * e1[0]]
+  const to2D = (p: readonly number[]): [number, number] => [
+    (p[0] - p0[0]) * e1[0] + (p[1] - p0[1]) * e1[1] + (p[2] - p0[2]) * e1[2],
+    (p[0] - p0[0]) * e2[0] + (p[1] - p0[1]) * e2[1] + (p[2] - p0[2]) * e2[2],
+  ]
+  const shoelace = (poly: [number, number][]) => {
+    let s = 0
+    for (let i = 0; i < poly.length; i++) {
+      const [x0, y0] = poly[i], [x1, y1] = poly[(i + 1) % poly.length]
+      s += x0 * y1 - x1 * y0
+    }
+    return s / 2
+  }
+  const ccw = (poly: [number, number][]) => (shoelace(poly) < 0 ? poly.slice().reverse() : poly)
+  const clipHalf = (poly: [number, number][], A: number, B: number, C: number): [number, number][] => {
+    const out: [number, number][] = []
+    for (let i = 0; i < poly.length; i++) {
+      const pa = poly[i], pb = poly[(i + 1) % poly.length]
+      const da = A * pa[0] + B * pa[1] - C
+      const db = A * pb[0] + B * pb[1] - C
+      const aIn = da <= 1e-9
+      const bIn = db <= 1e-9
+      if (aIn) out.push(pa)
+      if (aIn !== bIn) {
+        const t = da / (da - db)
+        out.push([pa[0] + (pb[0] - pa[0]) * t, pa[1] + (pb[1] - pa[1]) * t])
+      }
+    }
+    return out
+  }
+  let poly = ccw(a.map(to2D))
+  const bCcw = ccw(b.map(to2D))
+  for (let i = 0; i < bCcw.length && poly.length >= 3; i++) {
+    const pa = bCcw[i], pb = bCcw[(i + 1) % bCcw.length]
+    const dx = pb[0] - pa[0], dy = pb[1] - pa[1]
+    const len = Math.hypot(dx, dy) || 1
+    const A = dy / len, B = -dx / len
+    poly = clipHalf(poly, A, B, A * pa[0] + B * pa[1])
+  }
+  return poly.length >= 3 ? Math.abs(shoelace(poly)) : 0
 }
 
 /** True when `p` sits (within `eps`) on one of `prism`'s bounding planes:

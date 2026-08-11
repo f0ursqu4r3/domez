@@ -494,24 +494,48 @@ function clipOneUnit(unit: PanelUnit, unitIndex: number, model: DomeModel, radiu
   // ---- Loops ----
   // Not derived from the fragment wedge fan above (see `buildLoopsFromFragments`'s
   // doc comment on why that's fragile once a prism has many sides): instead,
-  // walk the candidates one at a time against the current set of surviving
-  // regions (starting from just the outline). For each region, `bite` =
-  // region ∩ this one prism, computed as a single sequential half-plane
-  // clip (never decomposed into wedges). If `bite` never touches the
-  // region's own boundary it's a clean interior hole; otherwise splice
-  // region and (reversed) bite together through the same T-junction-aware
-  // reconstruction, which — fed only these two clean polygons instead of a
-  // multi-generation wedge soup — naturally yields one notched region, or
-  // several if the bite happens to cut all the way through (a genuine
-  // split), via its per-loop "unvisited start edge" chaining.
-  let regions: TaggedFrag[] = [{ pts: outline, tags: outline.map((_, i) => outlineTag(i)) }]
-  const holes: TaggedFrag[] = []
+  // walk the candidates one at a time against the current set of tracked
+  // pieces (starting from just the outline, isHole=false). For each piece,
+  // `bite` = piece ∩ this one prism, computed as a single sequential
+  // half-plane clip (never decomposed into wedges).
+  //
+  // Every piece — outer material AND any hole recorded earlier — is run
+  // through the exact same bite/touch/notch logic. That uniformity is what
+  // keeps overlapping opening prisms honest: users can place two windows
+  // that overlap, or a door that entirely swallows an earlier window, and
+  // the optimizer only discourages this, it doesn't forbid it (`clipPanels`
+  // is a public engine API). If a hole's own prior bite were exempted from
+  // later prisms (as it used to be), a second prism overlapping it would
+  // either double-subtract the overlap (recording two overlapping hole
+  // loops for what should be one merged void) or leave a hole loop floating
+  // inside a notch that already swallowed it — both silently wrong, since
+  // `fragments`/`area` don't go through this path and stay correct, so only
+  // `loops` would lie.
+  //
+  // Processing every piece uniformly against every candidate makes this
+  // correct by the set identity A∪B = (A\B)∪B, applied piece by piece: a
+  // fresh, still-untouched piece (isHole=false, i.e. outer material whose
+  // own boundary a hole never alters) captures each new prism's bite in
+  // full the first time it doesn't touch that piece's boundary (the "∪B"
+  // term); every OTHER already-tracked piece — outer or hole — that the
+  // same bite also overlaps gets notched down by exactly that overlap (the
+  // "A\B" term), whether it's a clean interior hole a corner nibbles off
+  // (fixing repro 1: two overlapping windows shrink to non-overlapping
+  // pieces whose union is exact) or an entire hole a later door swallows,
+  // which notches to nothing at all and is correctly dropped (fixing repro
+  // 2: no floating hole regardless of prism order). A non-touching bite
+  // found against an EXISTING hole (fully redundant, already-void overlap)
+  // is discarded rather than recorded again, since it carries no new area.
+  interface TrackedFrag extends TaggedFrag {
+    isHole: boolean
+  }
+  let pieces: TrackedFrag[] = [{ pts: outline, tags: outline.map((_, i) => outlineTag(i)), isHole: false }]
   for (let ci = 0; ci < candidates.length; ci++) {
     const planeSet = candidates[ci]
     const ownPrefix = `p:${ci}:`
-    const nextRegions: TaggedFrag[] = []
-    for (const region of regions) {
-      let bite: TaggedFrag = region
+    const nextPieces: TrackedFrag[] = []
+    for (const piece of pieces) {
+      let bite: TaggedFrag = piece
       for (let pj = 0; pj < planeSet.length; pj++) {
         const pl = planeSet[pj]
         const eps = REL_EPS * diameter * pl.norm
@@ -519,22 +543,23 @@ function clipOneUnit(unit: PanelUnit, unitIndex: number, model: DomeModel, radiu
         if (bite.pts.length < 3) break
       }
       if (bite.pts.length < 3 || Math.abs(area2(bite.pts)) < areaFloor) {
-        nextRegions.push(region)
+        nextPieces.push(piece)
         continue
       }
       const touchesBoundary = bite.tags.some((t) => !t.startsWith(ownPrefix))
       if (!touchesBoundary) {
-        nextRegions.push(region)
-        holes.push(bite)
+        nextPieces.push(piece)
+        if (!piece.isHole) nextPieces.push({ ...bite, isHole: true })
         continue
       }
-      const pieces = buildLoopsFromFragments([region, reverseTaggedFrag(bite)], diameter, areaFloor)
-      for (const piece of pieces) nextRegions.push({ pts: piece.pts2D, tags: piece.tags })
+      const notched = buildLoopsFromFragments([piece, reverseTaggedFrag(bite)], diameter, areaFloor)
+      for (const n of notched) nextPieces.push({ pts: n.pts2D, tags: n.tags, isHole: piece.isHole })
     }
-    regions = nextRegions
+    pieces = nextPieces
   }
 
-  const loopsWithArea: LoopWithArea[] = [...regions, ...holes.map(reverseTaggedFrag)]
+  const loopsWithArea: LoopWithArea[] = pieces
+    .map((p) => (p.isHole ? reverseTaggedFrag(p) : p))
     .map((f) => ({ pts2D: f.pts, tags: f.tags, signedArea: area2(f.pts) }))
     .filter((l) => Math.abs(l.signedArea) >= areaFloor)
   loopsWithArea.sort((a, b) => Math.abs(b.signedArea) - Math.abs(a.signedArea))

@@ -717,6 +717,9 @@ function optimizeDoorPosition(index: number): DoorPlacementResult | null {
     minStubLength: minStubLength.value,
     increment: state.increment,
     otherDoors: portalSpecs.value.filter((s) => s.id !== spec.id),
+    // Candidate scoring re-cuts the doorway per bearing — without the riser
+    // height every candidate is scored against a riser-less dome.
+    riserHeight: workingRiserHeight.value,
   })
   state.doors[index].azimuthDeg = result.azimuthDeg
   return result
@@ -731,6 +734,9 @@ function optimizeWindowPosition(index: number): DoorPlacementResult | null {
     increment: state.increment,
     otherDoors: portalSpecs.value.filter((s) => s.id !== spec.id),
     sillSearchHalfWidth: state.units === 'imperial' ? 12 : 300,
+    // The sill-axis floor is max(riserHeight + margin + eps, ...) — omitting
+    // this lets the search return a sill inside the riser band.
+    riserHeight: workingRiserHeight.value,
   })
   state.framedWindows[index].azimuthDeg = result.azimuthDeg
   if (typeof result.sillHeight === 'number') state.framedWindows[index].sillMm = toMm(result.sillHeight)

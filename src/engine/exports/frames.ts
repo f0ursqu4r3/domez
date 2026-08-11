@@ -48,7 +48,9 @@ export function frameJigsSvg(plan: PanelFramePlan, units: UnitSystem, title: str
   const fmt = (v: number) => formatLength(v, units)
 
   const hasManySides = plan.types.some((t) => t.sides > 4)
-  const hasSquareSill = plan.types.some((t) => t.members.some((mm) => mm.boundary && mm.bevelDeg === 0))
+  const hasSquareSill = plan.types.some((t) =>
+    t.members.some((mm) => mm.boundary && mm.bevelDeg === 0 && !mm.cutEdge),
+  )
   const hasSiteFit = plan.types.some((t) => t.siteFit)
   const footNotes = [
     units === 'imperial' ? '16″ seam-bolt spacing.' : '400 mm seam-bolt spacing.',

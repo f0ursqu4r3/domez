@@ -134,6 +134,22 @@ export function buildBom(
   for (const r of panelPlan.rects) perimeter += r.count * 2 * (r.w + r.h)
   for (const z of panelPlan.rhombs) perimeter += z.count * 4 * Math.hypot(z.d1 / 2, z.d2 / 2)
   for (const g of panelPlan.polys) perimeter += g.count * g.edges.reduce((a, b) => a + b, 0)
+  // Clipped (site-fit) pieces are each unique — sum every outline's edge
+  // lengths directly, plus every hole's rim (screws fasten around openings
+  // too), rather than the count × representative-edges pattern above.
+  const loopPerimeter = (pts: readonly (readonly [number, number])[]) => {
+    let p = 0
+    for (let i = 0; i < pts.length; i++) {
+      const [x1, y1] = pts[i]
+      const [x2, y2] = pts[(i + 1) % pts.length]
+      p += Math.hypot(x2 - x1, y2 - y1)
+    }
+    return p
+  }
+  for (const c of panelPlan.clipped) {
+    perimeter += loopPerimeter(c.outline)
+    for (const h of c.holes) perimeter += loopPerimeter(h)
+  }
   if (perimeter > 0) {
     const inches = panelPlan.sheetW < 100 // sheet sized in inches vs mm
     const spacing = inches ? 8 : 200

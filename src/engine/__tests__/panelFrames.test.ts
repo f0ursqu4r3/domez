@@ -490,6 +490,98 @@ describe('panel frames: clip-driven X-types + overlap seams', () => {
   })
 })
 
+describe('final-review fixes: sill footnote / bom clipped perimeter / cut_edge column', () => {
+  const R = 156
+
+  it('leveled Z10 zome with a cut-edge opening does not print the natural-base scribe footnote', () => {
+    const z10 = generateZome({ sides: 10, pitchDeg: 55, rows: 5, baseMode: 'leveled' })
+    const door = {
+      id: 'D1',
+      azimuthDeg: 288,
+      width: 36,
+      height: 80,
+      shape: 'arch' as const,
+      extraDepth: 18,
+      margin: 12,
+    }
+    const cut = cutDoorways(z10, [door], R, { minStubLength: 6 })
+    const prisms = openingPrisms(z10, [door], R, { minStubLength: 6 })
+    const clips = clipPanels(z10, R, prisms)
+    const plan = buildPanelFrames(z10, R, 'imperial', cut, clips)
+
+    // Sanity: this scene actually produces cut-edge, bevel-0 boundary
+    // members — the exact pattern the old buggy predicate mistook for a
+    // natural-base square sill even on a leveled base.
+    const cutEdgeSquareSill = plan.types.some((t) =>
+      t.members.some((mm) => mm.boundary && mm.bevelDeg === 0 && mm.cutEdge),
+    )
+    expect(cutEdgeSquareSill).toBe(true)
+
+    const svg = frameJigsSvg(plan, 'imperial', 'DOMEZ test')
+    expect(svg).not.toContain('scribe to grade')
+  })
+
+  it('natural-base dome without openings still prints the scribe footnote (true positive preserved)', () => {
+    const m = generateDome({ frequency: 3, fraction: '1/2', baseMode: 'natural' })
+    const plan = buildPanelFrames(m, 156, 'imperial', NO_DOOR, clipPanels(m, 156, []))
+    const svg = frameJigsSvg(plan, 'imperial', 'DOMEZ test')
+    expect(svg).toContain('scribe to grade')
+  })
+
+  it('BOM panel screws count includes clipped-panel outline + hole perimeter', () => {
+    const m = generateDome({ frequency: 3, fraction: '1/2', baseMode: 'leveled' })
+    const basePlan = planPanels(m, R, { sheetW: 48, sheetL: 96, sheetLabel: '4×8', skinFactor: 1 })
+    const clippedPiece = {
+      label: 'X1',
+      outline: [
+        [0, 0],
+        [20, 0],
+        [20, 20],
+        [0, 20],
+      ] as [number, number][],
+      holes: [
+        [
+          [5, 5],
+          [15, 5],
+          [15, 15],
+          [5, 15],
+        ] as [number, number][],
+      ],
+      trueArea: 300,
+      bboxW: 20,
+      bboxH: 20,
+      seamed: false,
+    }
+    const planWithClip = { ...basePlan, clipped: [clippedPiece] }
+    const bomBase = buildBom(m, NO_DOOR, null, 'hub', basePlan)
+    const bomClip = buildBom(m, NO_DOOR, null, 'hub', planWithClip)
+    const screwsBase = bomBase.find((l) => l.key === 'screw-panel')?.quantity ?? 0
+    const screwsClip = bomClip.find((l) => l.key === 'screw-panel')!.quantity
+    expect(screwsClip).toBeGreaterThan(screwsBase)
+  })
+
+  it('framesCsv adds a cut_edge column: yes for opening-interface members, blank otherwise', () => {
+    const dome = generateDome({ frequency: 3, fraction: '1/2', baseMode: 'leveled' })
+    const archDoor = { id: 'D1', azimuthDeg: 0, width: 60, height: 90, shape: 'arch' as const, margin: 1.5 }
+    const cut = cutDoorways(dome, [archDoor], R, { minStubLength: 6 })
+    const prisms = openingPrisms(dome, [archDoor], R, { minStubLength: 6 })
+    const clips = clipPanels(dome, R, prisms)
+    const plan = buildPanelFrames(dome, R, 'imperial', cut, clips)
+
+    const csv = framesCsv(plan, 'imperial')
+    const header = csv.split('\n')[0]
+    expect(header.split(',')).toContain('cut_edge')
+
+    const rows = csv.split('\n').slice(1)
+    const cutEdgeMember = plan.types.flatMap((t) => t.members).find((mm) => mm.cutEdge)
+    const plainMember = plan.types.flatMap((t) => t.members).find((mm) => !mm.cutEdge)
+    expect(cutEdgeMember).toBeDefined()
+    expect(plainMember).toBeDefined()
+    expect(rows.some((r) => r.endsWith(',yes'))).toBe(true)
+    expect(rows.some((r) => r.endsWith(','))).toBe(true)
+  })
+})
+
 /** Face-centroid azimuth/height probe: pick the first face whose centroid
  * sits mid-height on the +x side, then report the bearing/sill that aims a
  * small opening at it. Copied from panelClip.test.ts (not exported there). */

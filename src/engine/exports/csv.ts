@@ -242,6 +242,7 @@ export function framesCsv(plan: PanelFramePlan, units: UnitSystem): string {
       'miter_end_deg',
       'bevel_deg',
       'boundary',
+      'cut_edge',
     ),
   ]
   for (const t of plan.types) {
@@ -256,6 +257,7 @@ export function framesCsv(plan: PanelFramePlan, units: UnitSystem): string {
           m.miterEndDeg.toFixed(1),
           m.bevelDeg.toFixed(1),
           m.boundary ? 'yes' : 'no',
+          m.cutEdge ? 'yes' : '',
         ),
       )
     }

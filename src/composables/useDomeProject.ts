@@ -13,12 +13,14 @@ import {
 import {
   cutDoorways,
   emptyDoorwayCut,
+  openingPrisms,
   optimizeDoorPlacement,
   type DoorPlacementResult,
   type DoorSpec,
 } from '@/engine/doorway'
 import { planPanels } from '@/engine/panels'
 import { buildPanelFrames } from '@/engine/panelFrames'
+import { clipPanels } from '@/engine/panelClip'
 import { buildRiser } from '@/engine/riser'
 import { buildBom, estimateCost } from '@/engine/bom'
 import { generateZome } from '@/engine/zome'
@@ -536,11 +538,27 @@ const doorway = computed(() =>
       }),
 )
 
+/** Panel-vs-opening clip results: index-aligned with `panelUnits(model)`.
+ * Shared by the frame takeoff and (Tasks 4–5) the viewer + panel plan, so
+ * every consumer sees the same clipped geometry for the current portals. */
+const panelClips = computed(() =>
+  portalSpecs.value.length === 0
+    ? []
+    : clipPanels(
+        model.value,
+        radius.value,
+        openingPrisms(model.value, portalSpecs.value, radius.value, {
+          minStubLength: minStubLength.value,
+          riserHeight: workingRiserHeight.value,
+        }),
+      ),
+)
+
 /** Framed-panel ("double wall") joint takeoff — independent per-panel jigs
  * bolted at every seam. Null unless that joint method is active. */
 const framePlan = computed(() =>
   state.jointId === 'framed-panel'
-    ? buildPanelFrames(model.value, radius.value, state.units, doorway.value)
+    ? buildPanelFrames(model.value, radius.value, state.units, doorway.value, panelClips.value)
     : null,
 )
 
@@ -1503,6 +1521,7 @@ export function useDomeProject() {
     riserHeight,
     workingRiserHeight,
     framePlan,
+    panelClips,
     bom,
     costEstimate,
     loadsResult,

@@ -1,8 +1,9 @@
 import type { DomeModel, UnitSystem } from './types'
 import { buildCutList, type JointMethodId } from './cutlist'
-import { cutDoorways, emptyDoorwayCut, type DoorSpec } from './doorway'
+import { cutDoorways, emptyDoorwayCut, openingPrisms, type DoorSpec } from './doorway'
 import { buildRiser } from './riser'
 import { buildPanelFrames } from './panelFrames'
+import { clipPanels } from './panelClip'
 import { packCuts, type StockLength } from './packing'
 import { workingToDiameter } from './units'
 
@@ -88,11 +89,27 @@ export function optimizeDiameter(model: DomeModel, opts: OptimizeOptions): Optim
         : undefined
     const candidateRadius = diameter / 2
     // Doorway topology (removed/trimmed edges) DOES vary with radius — reuse
-    // this candidate's own doorway cut (already recomputed above from the
-    // door specs), not a fixed snapshot from another radius.
+    // this candidate's own doorway cut and clips (both recomputed above/below
+    // from the door specs at THIS candidate's radius), never a fixed
+    // snapshot from another radius.
     const framePlan =
       opts.jointId === 'framed-panel'
-        ? buildPanelFrames(model, candidateRadius, opts.units, doorway ?? emptyDoorwayCut())
+        ? buildPanelFrames(
+            model,
+            candidateRadius,
+            opts.units,
+            doorway ?? emptyDoorwayCut(),
+            clipPanels(
+              model,
+              candidateRadius,
+              opts.doors && opts.doors.length > 0
+                ? openingPrisms(model, opts.doors, candidateRadius, {
+                    minStubLength: opts.minStubLength ?? 0,
+                    riserHeight: opts.riserHeight,
+                  })
+                : [],
+            ),
+          )
         : null
     const cutList = buildCutList(
       model,

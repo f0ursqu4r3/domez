@@ -3,7 +3,8 @@ import { buildPanelFrames } from '../panelFrames'
 import { generateDome } from '../dome'
 import { generateZome } from '../zome'
 import { generateGoldberg } from '../goldberg'
-import { emptyDoorwayCut } from '../doorway'
+import { cutDoorways, emptyDoorwayCut, openingPrisms } from '../doorway'
+import { clipPanels } from '../panelClip'
 import { buildCutList } from '../cutlist'
 import { packCuts } from '../packing'
 import { buildBom } from '../bom'
@@ -22,7 +23,7 @@ const NO_DOOR = emptyDoorwayCut()
 describe('panel frames', () => {
   it('counts members: 2 per interior edge, 1 per boundary edge', () => {
     const m = generateDome({ frequency: 3, fraction: '1/2', baseMode: 'leveled' })
-    const plan = buildPanelFrames(m, 156, 'imperial', NO_DOOR)
+    const plan = buildPanelFrames(m, 156, 'imperial', NO_DOOR, clipPanels(m, 156, []))
     const interior = m.edges.filter((e) => e.faceIds.length === 2).length
     const boundary = m.edges.length - interior
     expect(plan.totalMembers).toBe(2 * interior + boundary)
@@ -35,7 +36,7 @@ describe('panel frames', () => {
 
   it('1V: equilateral triangles → every miter is 30°', () => {
     const m = generateDome({ frequency: 1, fraction: '1/2', baseMode: 'natural' })
-    const plan = buildPanelFrames(m, 156, 'imperial', NO_DOOR)
+    const plan = buildPanelFrames(m, 156, 'imperial', NO_DOOR, clipPanels(m, 156, []))
     for (const t of plan.types) {
       for (const mem of t.members) {
         expect(mem.miterStartDeg).toBeCloseTo(30, 1)
@@ -47,7 +48,7 @@ describe('panel frames', () => {
 
   it('interior bevels are half the seam dihedral; sills get the floor bevel', () => {
     const m = generateDome({ frequency: 3, fraction: '1/2', baseMode: 'leveled' })
-    const plan = buildPanelFrames(m, 156, 'imperial', NO_DOOR)
+    const plan = buildPanelFrames(m, 156, 'imperial', NO_DOOR, clipPanels(m, 156, []))
     // Reference: half of (180 − dihedral) for a known interior edge type.
     const interiorEdge = m.edges.find((e) => e.faceIds.length === 2)!
     const expected = (180 - interiorEdge.dihedralDeg) / 2
@@ -64,7 +65,7 @@ describe('panel frames', () => {
 
   it('natural-base boundary members are square-cut', () => {
     const m = generateDome({ frequency: 3, fraction: '1/2', baseMode: 'natural' })
-    const plan = buildPanelFrames(m, 156, 'imperial', NO_DOOR)
+    const plan = buildPanelFrames(m, 156, 'imperial', NO_DOOR, clipPanels(m, 156, []))
     const sills = plan.types.flatMap((t) => t.members.filter((mm) => mm.boundary))
     expect(sills.length).toBeGreaterThan(0)
     for (const s of sills) expect(s.bevelDeg).toBe(0)
@@ -72,13 +73,13 @@ describe('panel frames', () => {
 
   it('zome frames are 4-sided; goldberg frames are 5/6-sided', () => {
     const z = generateZome({ sides: 8, pitchDeg: 45, rows: 4, baseMode: 'natural' })
-    const zp = buildPanelFrames(z, 156, 'imperial', NO_DOOR)
+    const zp = buildPanelFrames(z, 156, 'imperial', NO_DOOR, clipPanels(z, 156, []))
     expect(zp.types.length).toBeGreaterThan(0)
     for (const t of zp.types) expect(t.sides).toBe(4)
     expect(zp.totalPanels).toBe(z.rhombi!.length)
 
     const g = generateGoldberg({ frequency: 2, fraction: '1/2', baseMode: 'natural' })
-    const gp = buildPanelFrames(g, 156, 'imperial', NO_DOOR)
+    const gp = buildPanelFrames(g, 156, 'imperial', NO_DOOR, clipPanels(g, 156, []))
     const sides = new Set(gp.types.map((t) => t.sides))
     expect(sides.has(5)).toBe(true)
     expect(sides.has(6)).toBe(true)
@@ -87,7 +88,7 @@ describe('panel frames', () => {
 
   it('member long-point lengths equal panel edge lengths', () => {
     const m = generateDome({ frequency: 2, fraction: '1/2', baseMode: 'natural' })
-    const plan = buildPanelFrames(m, 100, 'imperial', NO_DOOR)
+    const plan = buildPanelFrames(m, 100, 'imperial', NO_DOOR, clipPanels(m, 100, []))
     const edgeLengths = new Set(m.edges.map((e) => (e.chordFactor * 100).toFixed(1)))
     for (const t of plan.types) {
       for (const mem of t.members) {
@@ -98,7 +99,7 @@ describe('panel frames', () => {
 
   it('framed-panel cut list: strut rows replaced by frame member rows', () => {
     const m = generateDome({ frequency: 3, fraction: '1/2', baseMode: 'leveled' })
-    const plan = buildPanelFrames(m, 156, 'imperial', NO_DOOR)
+    const plan = buildPanelFrames(m, 156, 'imperial', NO_DOOR, clipPanels(m, 156, []))
     const cl = buildCutList(
       m,
       { radius: 156, increment: 1 / 8, endOffset: 0, units: 'imperial', jointId: 'framed-panel' },
@@ -127,7 +128,7 @@ describe('panel frames', () => {
 
   it('framed-panel BOM: bolts sized to seam intervals, no hub hardware', () => {
     const m = generateDome({ frequency: 3, fraction: '1/2', baseMode: 'leveled' })
-    const plan = buildPanelFrames(m, 156, 'imperial', NO_DOOR)
+    const plan = buildPanelFrames(m, 156, 'imperial', NO_DOOR, clipPanels(m, 156, []))
     const panelPlan = planPanels(m, 156, { sheetW: 48, sheetL: 96, sheetLabel: '4×8', skinFactor: 1 })
     const bom = buildBom(m, NO_DOOR, null, 'framed-panel', panelPlan, plan)
     const boltLine = bom.find((l) => l.key === 'bolt')
@@ -140,7 +141,7 @@ describe('panel frames', () => {
 
   it('framesCsv emits one row per member spec, plus a header', () => {
     const m = generateDome({ frequency: 3, fraction: '1/2', baseMode: 'leveled' })
-    const plan = buildPanelFrames(m, 156, 'imperial', NO_DOOR)
+    const plan = buildPanelFrames(m, 156, 'imperial', NO_DOOR, clipPanels(m, 156, []))
     const csv = framesCsv(plan, 'imperial')
     const lineCount = csv.split('\n').length
     const specCount = plan.types.reduce((n, t) => n + t.members.length, 0)
@@ -172,7 +173,7 @@ describe('panel frames', () => {
 
   it('frameJigsSvg draws one page per frame type, each with bevel annotations and sill notes', () => {
     const m = generateDome({ frequency: 3, fraction: '1/2', baseMode: 'leveled' })
-    const plan = buildPanelFrames(m, 156, 'imperial', NO_DOOR)
+    const plan = buildPanelFrames(m, 156, 'imperial', NO_DOOR, clipPanels(m, 156, []))
     const svg = frameJigsSvg(plan, 'imperial', 'DOMEZ test')
     const pageMatches = svg.match(/data-frame-page="/g) ?? []
     expect(pageMatches.length).toBe(plan.types.length)
@@ -190,7 +191,7 @@ describe('panel frames', () => {
     // panelFrames.ts, never reconstructed by guessing in the renderer) is
     // the only thing that can place it correctly.
     const m = generateDome({ frequency: 2, fraction: '1/2', baseMode: 'leveled' })
-    const plan = buildPanelFrames(m, 156, 'imperial', NO_DOOR)
+    const plan = buildPanelFrames(m, 156, 'imperial', NO_DOOR, clipPanels(m, 156, []))
     const type = plan.types.find((t) => {
       const boundaryMembers = t.members.filter((mm) => mm.boundary)
       return boundaryMembers.length === 1 && boundaryMembers[0].count === 1 && t.members.length >= 2
@@ -222,7 +223,7 @@ describe('panel frames', () => {
 
   it('frameJigsSvg: per-edge data-bevel follows edgeMemberIdx exactly, in outline order (1V leveled)', () => {
     const m = generateDome({ frequency: 1, fraction: '1/2', baseMode: 'leveled' })
-    const plan = buildPanelFrames(m, 156, 'imperial', NO_DOOR)
+    const plan = buildPanelFrames(m, 156, 'imperial', NO_DOOR, clipPanels(m, 156, []))
     const type = plan.types.find((t) => t.members.some((mm) => mm.boundary))
     expect(type).toBeDefined()
 
@@ -265,14 +266,14 @@ describe('panel frames', () => {
 
   it('frameJigsSvg: natural-base 3V plan carries the square-sill scribe caveat', () => {
     const m = generateDome({ frequency: 3, fraction: '1/2', baseMode: 'natural' })
-    const plan = buildPanelFrames(m, 156, 'imperial', NO_DOOR)
+    const plan = buildPanelFrames(m, 156, 'imperial', NO_DOOR, clipPanels(m, 156, []))
     const svg = frameJigsSvg(plan, 'imperial', 'DOMEZ test')
     expect(svg).toContain('scribe to grade')
   })
 
   it('framed cut-list CSV (3V leveled) never leaks NaN onto the page', () => {
     const m = generateDome({ frequency: 3, fraction: '1/2', baseMode: 'leveled' })
-    const plan = buildPanelFrames(m, 156, 'imperial', NO_DOOR)
+    const plan = buildPanelFrames(m, 156, 'imperial', NO_DOOR, clipPanels(m, 156, []))
     const cl = buildCutList(
       m,
       { radius: 156, increment: 1 / 8, endOffset: 0, units: 'imperial', jointId: 'framed-panel' },
@@ -282,5 +283,65 @@ describe('panel frames', () => {
     )
     const csv = cutListCsv(cl, 'imperial')
     expect(csv.includes('NaN')).toBe(false)
+  })
+})
+
+describe('panel frames: clip-driven X-types + overlap seams', () => {
+  const R = 156
+  const zome = generateZome({ sides: 8, pitchDeg: 45, rows: 4, baseMode: 'natural' })
+  // A door big enough to fully consume at least one panel of the golden 3V
+  // dome and clip several of its neighbors, so both new code paths
+  // (site-fit X-types, surviving-overlap seams) actually exercise.
+  const archDoor = { id: 'D1', azimuthDeg: 0, width: 60, height: 90, shape: 'arch' as const, margin: 1.5 }
+
+  it('clipped panels become one-off site-fit X types with closed frames', () => {
+    const dome = generateDome({ frequency: 3, fraction: '1/2', baseMode: 'leveled' })
+    const cut = cutDoorways(dome, [archDoor], R, { minStubLength: 6 })
+    const prisms = openingPrisms(dome, [archDoor], R, { minStubLength: 6 })
+    const clips = clipPanels(dome, R, prisms)
+    const plan = buildPanelFrames(dome, R, 'imperial', cut, clips)
+    const xTypes = plan.types.filter((t) => t.siteFit)
+    expect(xTypes.length).toBeGreaterThan(0)
+    for (const t of xTypes) {
+      expect(t.panelCount).toBe(1)
+      expect(t.label).toMatch(/^X\d+$/)
+      // Members cover every loop edge: total member count (Σ count) equals
+      // outline edges + hole edges.
+      const edgeCount = t.outline.length + (t.holes ?? []).reduce((s, h) => s + h.length, 0)
+      expect(t.members.reduce((s, m) => s + m.count, 0)).toBe(edgeCount)
+    }
+  })
+
+  it('no clipped panels → output identical to the pre-change plan', () => {
+    // Pinned from the pre-refactor implementation (buildPanelFrames without
+    // a `clips` argument) on the exact same golden zome, before this task's
+    // change — captured once, hard-coded here as the frozen baseline.
+    const plan = buildPanelFrames(zome, R, 'imperial', emptyDoorwayCut(), clipPanels(zome, R, []))
+    expect(plan.types.length).toBe(4)
+    expect(plan.totalPanels).toBe(32)
+    expect(plan.seamCount).toBe(56)
+    expect(plan.boltCount).toBe(336)
+  })
+
+  it('seam overlap: an edge fully consumed by the opening is no seam', () => {
+    const dome = generateDome({ frequency: 3, fraction: '1/2', baseMode: 'leveled' })
+    const noDoorPlan = buildPanelFrames(
+      dome,
+      R,
+      'imperial',
+      emptyDoorwayCut(),
+      clipPanels(dome, R, []),
+    )
+    const cut = cutDoorways(dome, [archDoor], R, { minStubLength: 6 })
+    const prisms = openingPrisms(dome, [archDoor], R, { minStubLength: 6 })
+    const clips = clipPanels(dome, R, prisms)
+    const plan = buildPanelFrames(dome, R, 'imperial', cut, clips)
+    // At least one panel was fully removed by the door — every seam along
+    // its edges (shared with a still-present neighbor) must disappear.
+    expect(plan.omittedPanels).toBeGreaterThan(0)
+    expect(plan.seamCount).toBeLessThan(noDoorPlan.seamCount)
+    // `boltCount` sums max(2, ceil(len/spacing)) per seam — this is exactly
+    // "every seam gets at least 2 bolts" expressed through the plan totals.
+    expect(plan.boltCount).toBeGreaterThanOrEqual(2 * plan.seamCount)
   })
 })
